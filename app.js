@@ -9,19 +9,25 @@ import bcrypt from 'bcrypt';
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-
 const PORT = 3000;
 
 app.use(express.static('public'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Upload folder setup
-const uploadFolder = './uploads';
-if (!fs.existsSync(uploadFolder)) fs.mkdirSync(uploadFolder);
+// --- Folder & file setup ---
+const uploadsDir = './uploads';
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
+const usersFile = './users.json';
+if (!fs.existsSync(usersFile)) fs.writeFileSync(usersFile, JSON.stringify({}, null, 2));
+
+const messagesFile = './messages.json';
+if (!fs.existsSync(messagesFile)) fs.writeFileSync(messagesFile, JSON.stringify({}, null, 2));
+
+// --- Multer config for uploads ---
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadFolder),
+  destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
     const name = Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -30,34 +36,28 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-/** User data management **/
-const usersFile = './users.json';
-let users = {};
-if (fs.existsSync(usersFile)) {
-  users = JSON.parse(fs.readFileSync(usersFile));
-}
+// --- Load users and messages ---
+let users = JSON.parse(fs.readFileSync(usersFile));
+let messages = JSON.parse(fs.readFileSync(messagesFile)); // { chatId: [ messages ] }
 
 function saveUsers() {
   fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
 }
-
-/** Messages data: memory store **/
-const messages = {}; // { chatId: [ { from, to, text?, media?, time } ] }
+function saveMessages() {
+  fs.writeFileSync(messagesFile, JSON.stringify(messages, null, 2));
+}
 
 function getChatId(user1, user2) {
   return [user1, user2].sort().join('|');
 }
 
-// Track online users: username -> socket.id
+// --- In-memory user tracking ---
 const onlineUsers = {};
-
-// Track chat deletions (only for self delete)
 const deletedChatsByUser = {}; // { username: { chatId: true } }
 
 io.on('connection', socket => {
   let currentUser = null;
 
-  // Login event
   socket.on('login', async ({ username, password }) => {
     if (!username || !password) {
       socket.emit('loginResult', { success: false, message: 'Username dan password wajib diisi' });
@@ -76,14 +76,11 @@ io.on('connection', socket => {
 
     currentUser = username;
     onlineUsers[username] = socket.id;
-
-    // Kirim list online user
     io.emit('onlineUsers', Object.keys(onlineUsers));
 
-    // Kirim chatList ke client (filter chat yg dihapus sendiri)
-    const userDeletedChats = deletedChatsByUser[currentUser] || {};
+    const userDeleted = deletedChatsByUser[currentUser] || {};
     const chatList = Object.keys(messages)
-      .filter(chatId => chatId.includes(currentUser) && !userDeletedChats[chatId])
+      .filter(chatId => chatId.includes(currentUser) && !userDeleted[chatId])
       .map(chatId => {
         const other = chatId.split('|').find(u => u !== currentUser);
         const lastMsg = messages[chatId].slice(-1)[0];
@@ -94,7 +91,6 @@ io.on('connection', socket => {
     socket.emit('chatList', chatList);
   });
 
-  // Signup event
   socket.on('signup', async ({ username, password }) => {
     if (!username || !password) {
       socket.emit('signupResult', { success: false, message: 'Username dan password wajib diisi' });
@@ -110,7 +106,6 @@ io.on('connection', socket => {
     socket.emit('signupResult', { success: true });
   });
 
-  // Disconnect
   socket.on('disconnect', () => {
     if (currentUser) {
       delete onlineUsers[currentUser];
@@ -118,27 +113,21 @@ io.on('connection', socket => {
     }
   });
 
-  // Start private chat - kirim history pesan
   socket.on('startChat', (otherUser) => {
     if (!currentUser || !otherUser) return;
     const chatId = getChatId(currentUser, otherUser);
-
-    // Filter deleted chats for currentUser
-    const userDeletedChats = deletedChatsByUser[currentUser] || {};
-    if (userDeletedChats[chatId]) {
+    const deleted = deletedChatsByUser[currentUser] || {};
+    if (deleted[chatId]) {
       socket.emit('chatMessages', []);
       return;
     }
-
     const chatHistory = messages[chatId] || [];
     socket.emit('chatMessages', chatHistory);
   });
 
-  // Send message
   socket.on('sendMessage', ({ to, text, media }) => {
     if (!currentUser || !to) return;
     const chatId = getChatId(currentUser, to);
-
     if (!messages[chatId]) messages[chatId] = [];
 
     const msg = {
@@ -149,71 +138,59 @@ io.on('connection', socket => {
       ...(media ? { media } : {})
     };
     messages[chatId].push(msg);
+    saveMessages();
 
-    // Kirim pesan realtime ke 2 user jika online
     [currentUser, to].forEach(user => {
       const sockId = onlineUsers[user];
       if (sockId) {
         io.to(sockId).emit('newMessage', { chatId, message: msg });
-      }
-    });
 
-    // Update chatList ke kedua user
-    [currentUser, to].forEach(user => {
-      const sockId = onlineUsers[user];
-      if (sockId) {
-        const userDeletedChats = deletedChatsByUser[user] || {};
+        const deleted = deletedChatsByUser[user] || {};
         const chatList = Object.keys(messages)
-          .filter(cId => cId.includes(user) && !userDeletedChats[cId])
-          .map(cId => {
-            const other = cId.split('|').find(u => u !== user);
-            const lastMsg = messages[cId].slice(-1)[0];
-            return { user: other, lastMsg: lastMsg ? (lastMsg.text || '[Media]') : '' };
+          .filter(id => id.includes(user) && !deleted[id])
+          .map(id => {
+            const other = id.split('|').find(u => u !== user);
+            const last = messages[id].slice(-1)[0];
+            return { user: other, lastMsg: last ? (last.text || '[Media]') : '' };
           });
         io.to(sockId).emit('chatList', chatList);
       }
     });
   });
 
-  // Delete chat
   socket.on('deleteChat', ({ withUser, deleteForAll }) => {
     if (!currentUser || !withUser) return;
     const chatId = getChatId(currentUser, withUser);
 
     if (deleteForAll) {
-      // Delete all messages for both
       delete messages[chatId];
+      saveMessages();
 
       [currentUser, withUser].forEach(user => {
         const sockId = onlineUsers[user];
+        const deleted = deletedChatsByUser[user] || {};
+        const chatList = Object.keys(messages)
+          .filter(id => id.includes(user) && !deleted[id])
+          .map(id => {
+            const other = id.split('|').find(u => u !== user);
+            const last = messages[id].slice(-1)[0];
+            return { user: other, lastMsg: last ? (last.text || '[Media]') : '' };
+          });
         if (sockId) {
-          // Refresh chatList
-          const userDeletedChats = deletedChatsByUser[user] || {};
-          const chatList = Object.keys(messages)
-            .filter(cId => cId.includes(user) && !userDeletedChats[cId])
-            .map(cId => {
-              const other = cId.split('|').find(u => u !== user);
-              const lastMsg = messages[cId].slice(-1)[0];
-              return { user: other, lastMsg: lastMsg ? (lastMsg.text || '[Media]') : '' };
-            });
           io.to(sockId).emit('chatList', chatList);
-          // Notify chat deleted
           io.to(sockId).emit('chatDeleted', { chatId, byUser: currentUser });
         }
       });
     } else {
-      // Delete only for current user
       if (!deletedChatsByUser[currentUser]) deletedChatsByUser[currentUser] = {};
       deletedChatsByUser[currentUser][chatId] = true;
 
-      // Refresh chatList currentUser
-      const userDeletedChats = deletedChatsByUser[currentUser];
       const chatList = Object.keys(messages)
-        .filter(cId => cId.includes(currentUser) && !userDeletedChats[cId])
-        .map(cId => {
-          const other = cId.split('|').find(u => u !== currentUser);
-          const lastMsg = messages[cId].slice(-1)[0];
-          return { user: other, lastMsg: lastMsg ? (lastMsg.text || '[Media]') : '' };
+        .filter(id => id.includes(currentUser) && !deletedChatsByUser[currentUser][id])
+        .map(id => {
+          const other = id.split('|').find(u => u !== currentUser);
+          const last = messages[id].slice(-1)[0];
+          return { user: other, lastMsg: last ? (last.text || '[Media]') : '' };
         });
 
       socket.emit('chatList', chatList);
@@ -222,7 +199,6 @@ io.on('connection', socket => {
   });
 });
 
-// File upload route for media
 app.post('/upload', upload.single('media'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   res.json({ filename: req.file.filename });
