@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WoyApp - Chat</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app" style="display:none;">
+    <!-- Sidebar -->
+    <div id="chatList">
+      <input id="searchUser" type="text" placeholder="Cari username..." autocomplete="off" />
+      <ul id="listUsers"></ul>
+    </div>
+
+    <!-- Chat window -->
+    <div id="chatWindow">
+      <div id="chatHeader">
+        <div id="chatWith">Pilih chat</div>
+        <button id="deleteChatBtn">Hapus Chat</button>
+      </div>
+      <div id="chatbox"></div>
+      <form id="inputArea" autocomplete="off">
+        <input id="msgInput" type="text" placeholder="Ketik pesan..." />
+        <label for="mediaInput" title="Kirim media (gambar)">
+          📎
+        </label>
+        <input id="mediaInput" type="file" accept="image/*" />
+        <button type="submit">Kirim</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    let username = localStorage.getItem('username');
+    let password = localStorage.getItem('password');
+
+    if (!username || !password) {
+      window.location.href = 'login.html';
+    }
+
+    let currentChatUser = null;
+    let chatHistory = [];
+
+    // Login otomatis socket
+    socket.emit('login', { username, password });
+
+    socket.on('loginResult', res => {
+      if (!res.success) {
+        alert('Login gagal, silakan login ulang.');
+        localStorage.clear();
+        window.location.href = 'login.html';
+        return;
+      }
+      document.getElementById('app').style.display = 'grid';
+      loadChatList(res.chatList || []);
+    });
+
+    // Chat list dari server
+    socket.on('chatList', list => {
+      loadChatList(list);
+    });
+
+    // Online users update
+    let onlineUsers = [];
+    socket.on('onlineUsers', list => {
+      onlineUsers = list;
+      updateChatListOnlineStatus();
+    });
+
+    // Chat messages masuk
+    socket.on('chatMessages', messages => {
+      chatHistory = messages;
+      renderMessages();
+    });
+
+    // Pesan baru realtime
+    socket.on('newMessage', ({ chatId, message }) => {
+      if (!currentChatUser) return;
+      const id = [username, currentChatUser].sort().join('|');
+      if (chatId !== id) return;
+      chatHistory.push(message);
+      renderMessages();
+    });
+
+    // Chat terhapus
+    socket.on('chatDeleted', ({ chatId, byUser }) => {
+      const id = [username, currentChatUser].sort().join('|');
+      if (chatId === id) {
+        alert(`Chat dengan ${currentChatUser} dihapus oleh ${byUser}`);
+        chatHistory = [];
+        renderMessages();
+        loadChatList([]);
+      }
+    });
+
+    // Elemen
+    const listUsersEl = document.getElementById('listUsers');
+    const searchUserEl = document.getElementById('searchUser');
+    const chatWithEl = document.getElementById('chatWith');
+    const chatboxEl = document.getElementById('chatbox');
+    const inputAreaEl = document.getElementById('inputArea');
+    const msgInputEl = document.getElementById('msgInput');
+    const mediaInputEl = document.getElementById('mediaInput');
+    const deleteChatBtn = document.getElementById('deleteChatBtn');
+
+    function loadChatList(list) {
+      listUsersEl.innerHTML = '';
+      if (!list.length) {
+        listUsersEl.innerHTML = '<li>Tidak ada chat</li>';
+        return;
+      }
+      list.forEach(item => {
+        const li = document.createElement('li');
+        li.textContent = item.user;
+        li.title = `Klik untuk chat dengan ${item.user}`;
+
+        const lastMsgSpan = document.createElement('span');
+        lastMsgSpan.classList.add('lastMsg');
+        lastMsgSpan.textContent = item.lastMsg;
+        li.appendChild(lastMsgSpan);
+
+        if (onlineUsers.includes(item.user)) {
+          const dot = document.createElement('span');
+          dot.classList.add('online-dot');
+          li.appendChild(dot);
+        }
+
+        li.onclick = () => {
+          selectChat(item.user);
+        };
+        listUsersEl.appendChild(li);
+      });
+    }
+
+    function updateChatListOnlineStatus() {
+      Array.from(listUsersEl.children).forEach(li => {
+        const username = li.firstChild.textContent;
+        if (onlineUsers.includes(username)) {
+          if (!li.querySelector('.online-dot')) {
+            const dot = document.createElement('span');
+            dot.classList.add('online-dot');
+            li.appendChild(dot);
+          }
+        } else {
+          const dot = li.querySelector('.online-dot');
+          if (dot) dot.remove();
+        }
+      });
+    }
+
+    // Cari user dari chat list
+    searchUserEl.oninput = () => {
+      const val = searchUserEl.value.trim().toLowerCase();
+      Array.from(listUsersEl.children).forEach(li => {
+        if (li.textContent.toLowerCase().includes(val)) li.style.display = '';
+        else li.style.display = 'none';
+      });
+    };
+
+    function selectChat(user) {
+      currentChatUser = user;
+      chatWithEl.textContent = `Chat dengan ${user}`;
+      deleteChatBtn.style.display = 'inline-block';
+
+      // Minta history pesan
+      socket.emit('startChat', user);
+    }
+
+    // Kirim pesan
+    inputAreaEl.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!currentChatUser) {
+        alert('Pilih chat dulu!');
+        return;
+      }
+
+      const text = msgInputEl.value.trim();
+
+      if (!text && !mediaInputEl.files.length) return;
+
+      // Upload media jika ada
+      let mediaFile = null;
+      if (mediaInputEl.files.length) {
+        const file = mediaInputEl.files[0];
+        const formData = new FormData();
+        formData.append('media', file);
+
+        try {
+          const resp = await fetch('/upload', {
+            method: 'POST',
+            body: formData
+          });
+          const data = await resp.json();
+          if (data.filename) {
+            mediaFile = data.filename;
+          }
+        } catch (e) {
+          alert('Gagal upload media');
+          return;
+        }
+      }
+
+      socket.emit('sendMessage', {
+        to: currentChatUser,
+        text,
+        media: mediaFile
+      });
+
+      msgInputEl.value = '';
+      mediaInputEl.value = '';
+    };
+
+    function renderMessages() {
+      chatboxEl.innerHTML = '';
+      chatHistory.forEach(msg => {
+        const div = document.createElement('div');
+        div.classList.add('message');
+        div.classList.add(msg.from === username ? 'right' : 'left');
+
+        if (msg.text) {
+          div.textContent = msg.text;
+        }
+        if (msg.media) {
+          const img = document.createElement('img');
+          img.classList.add('media');
+          img.src = `/uploads/${msg.media}`;
+          img.alt = 'Media';
+          img.onclick = () => window.open(img.src, '_blank');
+          div.appendChild(img);
+        }
+
+        const timeSpan = document.createElement('span');
+        timeSpan.classList.add('time');
+        timeSpan.textContent = new Date(msg.time).toLocaleTimeString();
+        div.appendChild(timeSpan);
+
+        chatboxEl.appendChild(div);
+      });
+      chatboxEl.scrollTop = chatboxEl.scrollHeight;
+    }
+
+    // Hapus chat
+    deleteChatBtn.onclick = () => {
+      if (!currentChatUser) return;
+      const conf = confirm('Hapus chat ini?\nOK = Hapus hanya untuk saya\nCancel = Batal');
+      if (conf) {
+        // Hapus hanya untuk sendiri
+        socket.emit('deleteChat', { withUser: currentChatUser, deleteForAll: false });
+      }
+    };
+
+    // Hapus chat untuk semua
+    function deleteForAll() {
+      if (!currentChatUser) return;
+      const conf = confirm('Hapus chat ini untuk semua?\nOK = Hapus untuk semua\nCancel = Batal');
+      if (conf) {
+        socket.emit('deleteChat', { withUser: currentChatUser, deleteForAll: true });
+      }
+    }
+
+    // Shortcut hapus chat semua pakai tombol D + klik tombol hapus chat (contoh)
+    deleteChatBtn.addEventListener('dblclick', deleteForAll);
+
+  </script>
+</body>
+</html>
