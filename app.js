@@ -1,233 +1,220 @@
-import express from 'express';
-import http from 'http';
-import { Server } from 'socket.io';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
-import bcrypt from 'bcrypt';
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const path = require('path');
+const multer = require('multer');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = socketIo(server);
 
-const PORT = 3000;
-
+// Middleware
 app.use(express.static('public'));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Upload folder setup
-const uploadFolder = './uploads';
-if (!fs.existsSync(uploadFolder)) fs.mkdirSync(uploadFolder);
+const MESSAGES_FILE = path.join(__dirname, 'messages.json');
 
+// Setup multer
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadFolder),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const name = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, name + ext);
+  destination: function (req, file, cb) {
+    const uploadDir = 'public/uploads';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
   }
 });
-const upload = multer({ storage });
 
-/** User data management **/
-const usersFile = './users.json';
-let users = {};
-if (fs.existsSync(usersFile)) {
-  users = JSON.parse(fs.readFileSync(usersFile));
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter: function (req, file, cb) {
+    const allowedTypes = /jpeg|jpg|png|gif|mp4|mov|avi|pdf|doc|docx|txt/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('File type not allowed!'));
+    }
+  }
+});
+
+let connectedUsers = {};
+let messages = [];
+const MAX_USERS = 2;
+const MESSAGE_EXPIRY_HOURS = 24;
+
+// Load messages from file
+function loadMessages() {
+  try {
+    if (fs.existsSync(MESSAGES_FILE)) {
+      const data = fs.readFileSync(MESSAGES_FILE, 'utf8');
+      messages = JSON.parse(data);
+      console.log(`Loaded ${messages.length} messages from file`);
+      cleanExpiredMessages();
+    } else {
+      messages = [];
+      console.log('No existing messages file found, starting fresh');
+    }
+  } catch (error) {
+    console.error('Error loading messages:', error);
+    messages = [];
+  }
 }
 
-function saveUsers() {
-  fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
+// Save messages to file
+function saveMessages() {
+  try {
+    fs.writeFileSync(MESSAGES_FILE, JSON.stringify(messages, null, 2));
+  } catch (error) {
+    console.error('Error saving messages:', error);
+  }
 }
 
-/** Messages data: memory store **/
-const messages = {}; // { chatId: [ { from, to, text?, media?, time } ] }
-
-function getChatId(user1, user2) {
-  return [user1, user2].sort().join('|');
-}
-
-// Track online users: username -> socket.id
-const onlineUsers = {};
-
-// Track chat deletions (only for self delete)
-const deletedChatsByUser = {}; // { username: { chatId: true } }
-
-io.on('connection', socket => {
-  let currentUser = null;
-
-  // Login event
-  socket.on('login', async ({ username, password }) => {
-    if (!username || !password) {
-      socket.emit('loginResult', { success: false, message: 'Username dan password wajib diisi' });
-      return;
-    }
-    const user = users[username];
-    if (!user) {
-      socket.emit('loginResult', { success: false, message: 'User tidak ditemukan' });
-      return;
-    }
-    const match = await bcrypt.compare(password, user.passwordHash);
-    if (!match) {
-      socket.emit('loginResult', { success: false, message: 'Password salah' });
-      return;
-    }
-
-    currentUser = username;
-    onlineUsers[username] = socket.id;
-
-    // Kirim list online user
-    io.emit('onlineUsers', Object.keys(onlineUsers));
-
-    // Kirim chatList ke client (filter chat yg dihapus sendiri)
-    const userDeletedChats = deletedChatsByUser[currentUser] || {};
-    const chatList = Object.keys(messages)
-      .filter(chatId => chatId.includes(currentUser) && !userDeletedChats[chatId])
-      .map(chatId => {
-        const other = chatId.split('|').find(u => u !== currentUser);
-        const lastMsg = messages[chatId].slice(-1)[0];
-        return { user: other, lastMsg: lastMsg ? (lastMsg.text || '[Media]') : '' };
-      });
-
-    socket.emit('loginResult', { success: true, user: currentUser });
-    socket.emit('chatList', chatList);
-  });
-
-  // Signup event
-  socket.on('signup', async ({ username, password }) => {
-    if (!username || !password) {
-      socket.emit('signupResult', { success: false, message: 'Username dan password wajib diisi' });
-      return;
-    }
-    if (users[username]) {
-      socket.emit('signupResult', { success: false, message: 'Username sudah digunakan' });
-      return;
-    }
-    const passwordHash = await bcrypt.hash(password, 10);
-    users[username] = { username, passwordHash };
-    saveUsers();
-    socket.emit('signupResult', { success: true });
-  });
-
-  // Disconnect
-  socket.on('disconnect', () => {
-    if (currentUser) {
-      delete onlineUsers[currentUser];
-      io.emit('onlineUsers', Object.keys(onlineUsers));
-    }
-  });
-
-  // Start private chat - kirim history pesan
-  socket.on('startChat', (otherUser) => {
-    if (!currentUser || !otherUser) return;
-    const chatId = getChatId(currentUser, otherUser);
-
-    // Filter deleted chats for currentUser
-    const userDeletedChats = deletedChatsByUser[currentUser] || {};
-    if (userDeletedChats[chatId]) {
-      socket.emit('chatMessages', []);
-      return;
-    }
-
-    const chatHistory = messages[chatId] || [];
-    socket.emit('chatMessages', chatHistory);
-  });
-
-  // Send message
-  socket.on('sendMessage', ({ to, text, media }) => {
-    if (!currentUser || !to) return;
-    const chatId = getChatId(currentUser, to);
-
-    if (!messages[chatId]) messages[chatId] = [];
-
-    const msg = {
-      from: currentUser,
-      to,
-      time: Date.now(),
-      ...(text ? { text } : {}),
-      ...(media ? { media } : {})
-    };
-    messages[chatId].push(msg);
-
-    // Kirim pesan realtime ke 2 user jika online
-    [currentUser, to].forEach(user => {
-      const sockId = onlineUsers[user];
-      if (sockId) {
-        io.to(sockId).emit('newMessage', { chatId, message: msg });
-      }
-    });
-
-    // Update chatList ke kedua user
-    [currentUser, to].forEach(user => {
-      const sockId = onlineUsers[user];
-      if (sockId) {
-        const userDeletedChats = deletedChatsByUser[user] || {};
-        const chatList = Object.keys(messages)
-          .filter(cId => cId.includes(user) && !userDeletedChats[cId])
-          .map(cId => {
-            const other = cId.split('|').find(u => u !== user);
-            const lastMsg = messages[cId].slice(-1)[0];
-            return { user: other, lastMsg: lastMsg ? (lastMsg.text || '[Media]') : '' };
-          });
-        io.to(sockId).emit('chatList', chatList);
-      }
-    });
-  });
-
-  // Delete chat
-  socket.on('deleteChat', ({ withUser, deleteForAll }) => {
-    if (!currentUser || !withUser) return;
-    const chatId = getChatId(currentUser, withUser);
-
-    if (deleteForAll) {
-      // Delete all messages for both
-      delete messages[chatId];
-
-      [currentUser, withUser].forEach(user => {
-        const sockId = onlineUsers[user];
-        if (sockId) {
-          // Refresh chatList
-          const userDeletedChats = deletedChatsByUser[user] || {};
-          const chatList = Object.keys(messages)
-            .filter(cId => cId.includes(user) && !userDeletedChats[cId])
-            .map(cId => {
-              const other = cId.split('|').find(u => u !== user);
-              const lastMsg = messages[cId].slice(-1)[0];
-              return { user: other, lastMsg: lastMsg ? (lastMsg.text || '[Media]') : '' };
-            });
-          io.to(sockId).emit('chatList', chatList);
-          // Notify chat deleted
-          io.to(sockId).emit('chatDeleted', { chatId, byUser: currentUser });
+// Fungsi untuk menghapus file media
+function deleteMediaFile(message) {
+  if (message.media && message.media.path) {
+    const filePath = path.join(__dirname, 'public', message.media.path);
+    if (fs.existsSync(filePath)) {
+      fs.unlink(filePath, (err) => {
+        if (err) {
+          console.error(`Gagal menghapus file ${filePath}:`, err);
+        } else {
+          console.log(`Media dihapus: ${filePath}`);
         }
       });
+    }
+  }
+}
+
+// Hapus pesan > 24 jam + file media
+function cleanExpiredMessages() {
+  const now = new Date();
+  const newMessages = [];
+
+  for (const message of messages) {
+    const ageInHours = (now - new Date(message.timestamp)) / (1000 * 60 * 60);
+    if (ageInHours < MESSAGE_EXPIRY_HOURS) {
+      newMessages.push(message);
     } else {
-      // Delete only for current user
-      if (!deletedChatsByUser[currentUser]) deletedChatsByUser[currentUser] = {};
-      deletedChatsByUser[currentUser][chatId] = true;
+      deleteMediaFile(message);
+    }
+  }
 
-      // Refresh chatList currentUser
-      const userDeletedChats = deletedChatsByUser[currentUser];
-      const chatList = Object.keys(messages)
-        .filter(cId => cId.includes(currentUser) && !userDeletedChats[cId])
-        .map(cId => {
-          const other = cId.split('|').find(u => u !== currentUser);
-          const lastMsg = messages[cId].slice(-1)[0];
-          return { user: other, lastMsg: lastMsg ? (lastMsg.text || '[Media]') : '' };
-        });
+  const removedCount = messages.length - newMessages.length;
+  messages = newMessages;
 
-      socket.emit('chatList', chatList);
-      socket.emit('chatDeleted', { chatId, byUser: currentUser });
+  if (removedCount > 0) {
+    console.log(`Removed ${removedCount} expired messages`);
+    saveMessages();
+    io.emit('messages_cleaned', { removedCount });
+  }
+}
+
+// Jalankan setiap jam
+setInterval(cleanExpiredMessages, 60 * 60 * 1000);
+loadMessages();
+
+// ROUTES
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.post('/upload', upload.single('media'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  res.json({
+    filename: req.file.filename,
+    originalName: req.file.originalname,
+    size: req.file.size,
+    path: `/uploads/${req.file.filename}`
+  });
+});
+
+// SOCKET.IO
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  socket.on('join', (username) => {
+    if (Object.keys(connectedUsers).length >= MAX_USERS) {
+      socket.emit('room_full');
+      return;
+    }
+
+    const isTaken = Object.values(connectedUsers).some(user => user.username === username);
+    if (isTaken) {
+      socket.emit('username_taken');
+      return;
+    }
+
+    connectedUsers[socket.id] = {
+      username,
+      status: 'online',
+      joinedAt: new Date()
+    };
+
+    socket.username = username;
+    socket.emit('load_messages', messages);
+    io.emit('user_list_update', Object.values(connectedUsers));
+    socket.broadcast.emit('user_joined', username);
+    console.log(`${username} joined`);
+  });
+
+  socket.on('new_message', (data) => {
+    if (!socket.username) return;
+
+    const message = {
+      id: Date.now() + Math.random(),
+      username: socket.username,
+      text: data.text,
+      media: data.media || null,
+      timestamp: new Date(),
+      type: data.type || 'text'
+    };
+
+    messages.push(message);
+    saveMessages();
+    io.emit('message_received', message);
+  });
+
+  socket.on('typing', (isTyping) => {
+    if (!socket.username) return;
+    socket.broadcast.emit('user_typing', {
+      username: socket.username,
+      isTyping
+    });
+  });
+
+  socket.on('clear_messages', () => {
+    if (!socket.username) return;
+
+    messages.forEach(deleteMediaFile);
+    messages = [];
+    saveMessages();
+    io.emit('messages_cleared');
+    console.log(`${socket.username} cleared messages`);
+  });
+
+  socket.on('disconnect', () => {
+    if (socket.username) {
+      delete connectedUsers[socket.id];
+      io.emit('user_list_update', Object.values(connectedUsers));
+      socket.broadcast.emit('user_left', socket.username);
+      console.log(`${socket.username} left`);
     }
   });
 });
 
-// File upload route for media
-app.post('/upload', upload.single('media'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ filename: req.file.filename });
-});
-
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
