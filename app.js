@@ -48,7 +48,7 @@ const upload = multer({
 
 let connectedUsers = {};
 let messages = [];
-const MAX_USERS = 2;
+const MAX_USERS = 20;
 const MESSAGE_EXPIRY_HOURS = 24;
 
 // Load messages from file
