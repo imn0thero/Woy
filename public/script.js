@@ -112,6 +112,11 @@ document.addEventListener('DOMContentLoaded', function() {
         socket.on('connect', function() {
             socket.emit('join', username);
         });
+
+        socket.on('unauthorized', () => {
+    alert('Username tidak diizinkan! Hanya user yang terdaftar yang bisa masuk.');
+    // Redirect atau tampilkan pesan error
+        });
         
         socket.on('username_taken', function() {
             showLoginError('Nama pengguna sudah digunakan, silakan pilih yang lain');
