@@ -4,6 +4,8 @@ const socketIo = require('socket.io');
 const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
+// Tambahkan library untuk enkripsi end-to-end
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -14,6 +16,9 @@ app.use(express.static('public'));
 app.use(express.json());
 
 const MESSAGES_FILE = path.join(__dirname, 'messages.json');
+const USERS_FILE = path.join(__dirname, 'users.json');
+// File untuk menyimpan kunci publik pengguna
+const KEYS_FILE = path.join(__dirname, 'keys.json');
 
 // Setup multer
 const storage = multer.diskStorage({
@@ -48,8 +53,76 @@ const upload = multer({
 
 let connectedUsers = {};
 let messages = [];
-const MAX_USERS = 100;
+let authorizedUsers = [];
+// Menambahkan objek untuk menyimpan kunci publik pengguna
+let userPublicKeys = {};
+const MAX_USERS = 2; // Dibatasi hanya 2 user
 const MESSAGE_EXPIRY_HOURS = 24;
+
+// Load authorized users from file
+function loadAuthorizedUsers() {
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const data = fs.readFileSync(USERS_FILE, 'utf8');
+      authorizedUsers = JSON.parse(data);
+      console.log(`Loaded ${authorizedUsers.length} authorized users`);
+    } else {
+      // Buat file users.json default jika tidak ada
+      authorizedUsers = [
+        { username: "Azz" },
+        { username: "Queen" }
+      ];
+      saveAuthorizedUsers();
+      console.log('Created default users.json file');
+    }
+  } catch (error) {
+    console.error('Error loading authorized users:', error);
+    authorizedUsers = [
+      { username: "admin" },
+      { username: "user1" }
+    ];
+  }
+}
+
+// Save authorized users to file
+function saveAuthorizedUsers() {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(authorizedUsers, null, 2));
+  } catch (error) {
+    console.error('Error saving authorized users:', error);
+  }
+}
+
+// Load public keys from file
+function loadPublicKeys() {
+  try {
+    if (fs.existsSync(KEYS_FILE)) {
+      const data = fs.readFileSync(KEYS_FILE, 'utf8');
+      userPublicKeys = JSON.parse(data);
+      console.log(`Loaded public keys for ${Object.keys(userPublicKeys).length} users`);
+    } else {
+      userPublicKeys = {};
+      console.log('No existing keys file found, starting fresh');
+    }
+  } catch (error) {
+    console.error('Error loading public keys:', error);
+    userPublicKeys = {};
+  }
+}
+
+// Save public keys to file
+function savePublicKeys() {
+  try {
+    fs.writeFileSync(KEYS_FILE, JSON.stringify(userPublicKeys, null, 2));
+  } catch (error) {
+    console.error('Error saving public keys:', error);
+  }
+}
+
+// Check if username is authorized
+function isUserAuthorized(username) {
+  return authorizedUsers.some(user => user.username === username);
+}
 
 // Load messages from file
 function loadMessages() {
@@ -118,9 +191,32 @@ function cleanExpiredMessages() {
   }
 }
 
+// Generate server signature untuk verifikasi
+const { publicKey: serverPublicKey, privateKey: serverPrivateKey } = crypto.generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  publicKeyEncoding: {
+    type: 'spki',
+    format: 'pem'
+  },
+  privateKeyEncoding: {
+    type: 'pkcs8',
+    format: 'pem'
+  }
+});
+
+// Fungsi untuk membuat signature pesan dari server
+function createServerSignature(message) {
+  const sign = crypto.createSign('SHA256');
+  sign.write(JSON.stringify(message));
+  sign.end();
+  return sign.sign(serverPrivateKey, 'base64');
+}
+
 // Jalankan setiap jam
 setInterval(cleanExpiredMessages, 60 * 60 * 1000);
+loadAuthorizedUsers();
 loadMessages();
+loadPublicKeys();
 
 // ROUTES
 app.get('/', (req, res) => {
@@ -140,16 +236,50 @@ app.post('/upload', upload.single('media'), (req, res) => {
   });
 });
 
+// Route untuk mendapatkan server public key
+app.get('/server-key', (req, res) => {
+  res.json({ serverPublicKey });
+});
+
 // SOCKET.IO
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
+  // Kirim server public key ke client yang baru terhubung
+  socket.emit('server_public_key', { serverPublicKey });
+
+  socket.on('register_public_key', (data) => {
+    if (!socket.username) return;
+    
+    // Simpan kunci publik pengguna
+    userPublicKeys[socket.username] = data.publicKey;
+    savePublicKeys();
+    
+    // Broadcast ke semua user bahwa ada update kunci publik
+    io.emit('public_key_update', { 
+      username: socket.username, 
+      publicKey: data.publicKey 
+    });
+    
+    // Kirim semua kunci publik yang ada ke client baru
+    socket.emit('all_public_keys', userPublicKeys);
+  });
+
   socket.on('join', (username) => {
+    // Cek apakah username ada di users.json
+    if (!isUserAuthorized(username)) {
+      socket.emit('unauthorized');
+      console.log(`Unauthorized access attempt: ${username}`);
+      return;
+    }
+
+    // Cek apakah sudah mencapai batas maksimal user (2 user)
     if (Object.keys(connectedUsers).length >= MAX_USERS) {
       socket.emit('room_full');
       return;
     }
 
+    // Cek apakah username sudah digunakan
     const isTaken = Object.values(connectedUsers).some(user => user.username === username);
     if (isTaken) {
       socket.emit('username_taken');
@@ -164,22 +294,36 @@ io.on('connection', (socket) => {
 
     socket.username = username;
     socket.emit('load_messages', messages);
+    socket.emit('all_public_keys', userPublicKeys);
     io.emit('user_list_update', Object.values(connectedUsers));
     socket.broadcast.emit('user_joined', username);
-    console.log(`${username} joined`);
+    console.log(`${username} joined (authorized)`);
   });
 
   socket.on('new_message', (data) => {
     if (!socket.username) return;
 
+    // Data sudah terenkripsi di client side
     const message = {
       id: Date.now() + Math.random(),
       username: socket.username,
-      text: data.text,
+      // Pesan sudah terenkripsi oleh pengirim di client side
+      encryptedContent: data.encryptedContent,
+      // Kunci pesan terenkripsi untuk setiap recipient
+      encryptedKeys: data.encryptedKeys,
+      // Signature untuk verifikasi
+      signature: data.signature,
       media: data.media || null,
       timestamp: new Date(),
-      type: data.type || 'text'
+      type: data.type || 'encrypted'
     };
+
+    // Tambahkan signature server
+    message.serverSignature = createServerSignature({
+      id: message.id,
+      username: message.username,
+      timestamp: message.timestamp
+    });
 
     messages.push(message);
     saveMessages();
@@ -214,7 +358,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 80;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
