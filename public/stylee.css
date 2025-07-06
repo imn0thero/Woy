@@ -27,6 +27,25 @@ body, html {
     overflow: hidden;
 }
 
+/* Key Generation Screen */
+.key-generation-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(45deg, #1a1a2e, #16213e, #0f3460);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    backdrop-filter: blur(10px);
+}
+
+.key-generation-container {
+    text-align: center;
+    
+
 /* Floating Hearts Animation */
 @keyframes floatingHearts {
     0% { 
