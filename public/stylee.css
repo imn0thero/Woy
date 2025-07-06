@@ -44,6 +44,31 @@ body, html {
 
 .key-generation-container {
     text-align: center;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 40px;
+    border-radius: 20px;
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.romantic-spinner {
+    margin-bottom: 20px;
+}
+
+.heart-spinner {
+    font-size: 48px;
+    animation: heartSpin 2s ease-in-out infinite;
+}
+
+@keyframes heartSpin {
+    0%, 100% { transform: scale(1) rotate(0deg); }
+    25% { transform: scale(1.2) rotate(90deg); }
+    50% { transform: scale(1) rotate(180deg); }
+    75% { transform: scale(1.2) rotate(270deg); }
+}
+
+.key-generation-container h2 {
+    color: #fff;
     
 
 /* Floating Hearts Animation */
