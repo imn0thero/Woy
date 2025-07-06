@@ -28,116 +28,23 @@ body, html {
 }
 
 /* Key Generation Screen */
-/* Key Generation Screen */
-#key-generation-screen {
+.key-generation-screen {
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background: linear-gradient(45deg, #f06292, #ba68c8, #ff69b4, #ff1493);
+    background: linear-gradient(45deg, #1a1a2e, #16213e, #0f3460);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 9999;
-    background-size: 400% 400%;
-    animation: gradient 15s ease infinite;
-}
-
-.key-generation-container {
-    background-color: rgba(255, 255, 255, 0.9);
-    padding: 30px;
-    border-radius: 15px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-    text-align: center;
-    max-width: 400px;
-    width: 90%;
-    animation: pulse 2s infinite;
     backdrop-filter: blur(10px);
 }
 
-.key-generation-container h2 {
-    color: #e91e63;
-    margin-bottom: 15px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-}
-
-.key-generation-container p {
-    margin-bottom: 20px;
-    color: #666;
-}
-
-.romantic-spinner {
-    margin-bottom: 20px;
-}
-
-.heart-spinner {
-    font-size: 40px;
-    animation: spin 3s linear infinite;
-    display: inline-block;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg) scale(1); }
-    25% { transform: rotate(90deg) scale(1.2); }
-    50% { transform: rotate(180deg) scale(1); }
-    75% { transform: rotate(270deg) scale(1.2); }
-    100% { transform: rotate(360deg) scale(1); }
-}
-
-.progress-bar {
-    height: 6px;
-    background-color: #f8bbd0;
-    border-radius: 3px;
-    overflow: hidden;
-    margin-top: 15px;
-}
-
-.progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #e91e63, #ff69b4);
-    width: 0;
-}
-
-.hidden {
-    display: none !important;
-}
-
-/* Error handling */
-.error-icon {
-    font-size: 40px;
-    margin-bottom: 15px;
-    color: #f44336;
-    animation: shake 0.5s ease-in-out;
-}
-
-@keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
-    20%, 40%, 60%, 80% { transform: translateX(5px); }
-}
-
-.retry-button {
-    background: linear-gradient(135deg, #e91e63, #c2185b);
-    color: white;
-    border: none;
-    padding: 10px 20px;
-    border-radius: 20px;
-    margin-top: 15px;
-    cursor: pointer;
-    font-weight: 500;
-    transition: all 0.3s;
-}
-
-.retry-button:hover {
-    transform: scale(1.05);
-    box-shadow: 0 5px 15px rgba(233, 30, 99, 0.3);
-}
-
-
+.key-generation-container {
+    text-align: center;
+    
 /* Floating Hearts Animation */
 @keyframes floatingHearts {
     0% { 
