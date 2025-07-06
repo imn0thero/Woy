@@ -697,7 +697,6 @@ body, html {
 }
 
 /* Tambahkan setelah styling message yang sudah ada */
-
 .system-message {
     text-align: center;
     padding: 8px 12px;
@@ -722,20 +721,16 @@ body, html {
     }
 }
 
-/* Encryption indicator styling */
-.message-content span[title*="terenkripsi"] {
-    animation: encryptionPulse 3s ease-in-out infinite;
+/* Error state for username input */
+.input-group input.error {
+    border-color: #e53935;
+    animation: inputShake 0.5s ease-in-out;
 }
 
-@keyframes encryptionPulse {
-    0%, 100% { 
-        opacity: 0.7;
-        transform: scale(1);
-    }
-    50% { 
-        opacity: 1;
-        transform: scale(1.1);
-    }
+@keyframes inputShake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
 }
 
 /* Input Area */
