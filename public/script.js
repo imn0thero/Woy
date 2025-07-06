@@ -25,7 +25,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentUser;
     let currentMedia = null;
     let typingTimeout;
-    let onlineUsers = [];
+    let typingStatus = false;
     
     // Encryption variables
     let userKeyPair = null;
@@ -35,92 +35,167 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize
     init();
     
-    // Crypto Functions
-    async function generateKeyPair() {
+    // === CRYPTO FUNCTIONS ===
+    
+    // Generate consistent key pair for username
+    async function generateOrRestoreKeyPair(username) {
         try {
-            const keyPair = await crypto.subtle.generateKey(
+            showLoginError('🔑 Mempersiapkan enkripsi...');
+            
+            // Try to load existing key pair from localStorage
+            const storedKeyPair = loadKeyPairFromStorage(username);
+            if (storedKeyPair) {
+                console.log('🔑 Using stored key pair for', username);
+                return storedKeyPair;
+            }
+            
+            // Generate new key pair
+            showLoginError('🔑 Membuat kunci enkripsi baru...');
+            const keyPair = await window.crypto.subtle.generateKey(
                 {
                     name: "RSA-OAEP",
                     modulusLength: 2048,
                     publicExponent: new Uint8Array([1, 0, 1]),
                     hash: "SHA-256"
                 },
-                true,
+                true, // extractable
                 ["encrypt", "decrypt"]
             );
             
-            return keyPair;
+            // Export keys to store them
+            const publicKeyData = await exportKey(keyPair.publicKey, "spki");
+            const privateKeyData = await exportKey(keyPair.privateKey, "pkcs8");
+            
+            // Save to localStorage
+            saveKeyPairToStorage(username, publicKeyData, privateKeyData);
+            
+            console.log('🔑 Generated and saved new key pair for', username);
+            return {
+                publicKey: keyPair.publicKey,
+                privateKey: keyPair.privateKey,
+                publicKeyData: publicKeyData,
+                privateKeyData: privateKeyData
+            };
+            
         } catch (error) {
-            console.error('Error generating key pair:', error);
-            return null;
+            console.error('Error generating/restoring key pair:', error);
+            throw error;
         }
     }
     
-    async function exportPublicKey(publicKey) {
+    // Export key to base64 string
+    async function exportKey(key, format) {
         try {
-            const exported = await crypto.subtle.exportKey("spki", publicKey);
+            const exported = await window.crypto.subtle.exportKey(format, key);
             return arrayBufferToBase64(exported);
         } catch (error) {
-            console.error('Error exporting public key:', error);
+            console.error('Error exporting key:', error);
             return null;
         }
     }
     
-    async function importPublicKey(publicKeyData) {
+    // Import key from base64 string
+    async function importKey(keyData, format, keyUsages) {
         try {
-            const keyData = base64ToArrayBuffer(publicKeyData);
-            return await crypto.subtle.importKey(
-                "spki",
-                keyData,
+            const keyBuffer = base64ToArrayBuffer(keyData);
+            return await window.crypto.subtle.importKey(
+                format,
+                keyBuffer,
                 {
                     name: "RSA-OAEP",
                     hash: "SHA-256"
                 },
-                false,
-                ["encrypt"]
+                format === "pkcs8", // extractable only for private keys
+                keyUsages
             );
+        } catch (error) {
+            console.error('Error importing key:', error);
+            return null;
+        }
+    }
+    
+    // Save key pair to localStorage
+    function saveKeyPairToStorage(username, publicKeyData, privateKeyData) {
+        try {
+            const keyPairData = {
+                username: username,
+                publicKey: publicKeyData,
+                privateKey: privateKeyData,
+                timestamp: Date.now(),
+                version: "1.0"
+            };
+            
+            localStorage.setItem(`chat_keypair_${username}`, JSON.stringify(keyPairData));
+            console.log('💾 Key pair saved to localStorage for', username);
+            return true;
+        } catch (error) {
+            console.error('Error saving key pair to storage:', error);
+            return false;
+        }
+    }
+    
+    // Load key pair from localStorage
+    function loadKeyPairFromStorage(username) {
+        try {
+            const storedData = localStorage.getItem(`chat_keypair_${username}`);
+            if (!storedData) {
+                console.log('📭 No stored key pair found for', username);
+                return null;
+            }
+            
+            const keyPairData = JSON.parse(storedData);
+            
+            // Validate data
+            if (keyPairData.username !== username || !keyPairData.publicKey || !keyPairData.privateKey) {
+                console.warn('⚠️ Invalid stored key pair data for', username);
+                localStorage.removeItem(`chat_keypair_${username}`);
+                return null;
+            }
+            
+            return restoreKeyPairFromData(keyPairData);
+            
+        } catch (error) {
+            console.error('Error loading key pair from storage:', error);
+            // Clean up corrupted data
+            localStorage.removeItem(`chat_keypair_${username}`);
+            return null;
+        }
+    }
+    
+    // Restore key pair objects from stored data
+    async function restoreKeyPairFromData(keyPairData) {
+        try {
+            const publicKey = await importKey(keyPairData.publicKey, "spki", ["encrypt"]);
+            const privateKey = await importKey(keyPairData.privateKey, "pkcs8", ["decrypt"]);
+            
+            if (!publicKey || !privateKey) {
+                throw new Error('Failed to import stored keys');
+            }
+            
+            return {
+                publicKey: publicKey,
+                privateKey: privateKey,
+                publicKeyData: keyPairData.publicKey,
+                privateKeyData: keyPairData.privateKey
+            };
+        } catch (error) {
+            console.error('Error restoring key pair from data:', error);
+            return null;
+        }
+    }
+    
+    // Import public key from other users
+    async function importPublicKey(publicKeyData) {
+        try {
+            if (!publicKeyData) return null;
+            return await importKey(publicKeyData, "spki", ["encrypt"]);
         } catch (error) {
             console.error('Error importing public key:', error);
             return null;
         }
     }
     
-    async function encryptMessage(message, publicKey) {
-        try {
-            const encoded = new TextEncoder().encode(message);
-            const encrypted = await crypto.subtle.encrypt(
-                {
-                    name: "RSA-OAEP"
-                },
-                publicKey,
-                encoded
-            );
-            
-            return arrayBufferToBase64(encrypted);
-        } catch (error) {
-            console.error('Error encrypting message:', error);
-            return null;
-        }
-    }
-    
-    async function decryptMessage(encryptedMessage, privateKey) {
-        try {
-            const encryptedData = base64ToArrayBuffer(encryptedMessage);
-            const decrypted = await crypto.subtle.decrypt(
-                {
-                    name: "RSA-OAEP"
-                },
-                privateKey,
-                encryptedData
-            );
-            
-            return new TextDecoder().decode(decrypted);
-        } catch (error) {
-            console.error('Error decrypting message:', error);
-            return null;
-        }
-    }
-    
+    // Convert ArrayBuffer to Base64
     function arrayBufferToBase64(buffer) {
         const bytes = new Uint8Array(buffer);
         let binary = '';
@@ -130,18 +205,25 @@ document.addEventListener('DOMContentLoaded', function() {
         return btoa(binary);
     }
     
+    // Convert Base64 to ArrayBuffer
     function base64ToArrayBuffer(base64) {
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
+        try {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes.buffer;
+        } catch (error) {
+            console.error('Error converting base64 to ArrayBuffer:', error);
+            return null;
         }
-        return bytes.buffer;
     }
     
-    // Generate random AES key for message encryption
+    // === AES ENCRYPTION FOR MESSAGE CONTENT ===
+    
     async function generateAESKey() {
-        return await crypto.subtle.generateKey(
+        return await window.crypto.subtle.generateKey(
             {
                 name: "AES-GCM",
                 length: 256
@@ -151,58 +233,111 @@ document.addEventListener('DOMContentLoaded', function() {
         );
     }
     
-    async function encryptWithAES(message, key) {
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encoded = new TextEncoder().encode(message);
-        
-        const encrypted = await crypto.subtle.encrypt(
-            {
-                name: "AES-GCM",
-                iv: iv
-            },
-            key,
-            encoded
-        );
-        
-        return {
-            data: arrayBufferToBase64(encrypted),
-            iv: arrayBufferToBase64(iv)
-        };
+    async function encryptWithAES(text, key) {
+        try {
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const encoder = new TextEncoder();
+            const data = encoder.encode(text);
+            
+            const encrypted = await window.crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv },
+                key,
+                data
+            );
+            
+            return {
+                encrypted: arrayBufferToBase64(encrypted),
+                iv: arrayBufferToBase64(iv)
+            };
+        } catch (error) {
+            console.error('Error encrypting with AES:', error);
+            return null;
+        }
     }
     
-    async function decryptWithAES(encryptedData, key, iv) {
-        const data = base64ToArrayBuffer(encryptedData);
-        const ivArray = base64ToArrayBuffer(iv);
-        
-        const decrypted = await crypto.subtle.decrypt(
-            {
-                name: "AES-GCM",
-                iv: ivArray
-            },
-            key,
-            data
-        );
-        
-        return new TextDecoder().decode(decrypted);
+    async function decryptWithAES(encryptedData, iv, key) {
+        try {
+            const encryptedBuffer = base64ToArrayBuffer(encryptedData);
+            const ivBuffer = base64ToArrayBuffer(iv);
+            
+            const decrypted = await window.crypto.subtle.decrypt(
+                { name: "AES-GCM", iv: ivBuffer },
+                key,
+                encryptedBuffer
+            );
+            
+            return new TextDecoder().decode(decrypted);
+        } catch (error) {
+            console.error('Error decrypting with AES:', error);
+            return null;
+        }
     }
     
     async function exportAESKey(key) {
-        const exported = await crypto.subtle.exportKey("raw", key);
-        return arrayBufferToBase64(exported);
+        try {
+            const exported = await window.crypto.subtle.exportKey("raw", key);
+            return arrayBufferToBase64(exported);
+        } catch (error) {
+            console.error('Error exporting AES key:', error);
+            return null;
+        }
     }
     
     async function importAESKey(keyData) {
-        const keyBuffer = base64ToArrayBuffer(keyData);
-        return await crypto.subtle.importKey(
-            "raw",
-            keyBuffer,
-            "AES-GCM",
-            false,
-            ["decrypt"]
-        );
+        try {
+            const keyBuffer = base64ToArrayBuffer(keyData);
+            return await window.crypto.subtle.importKey(
+                "raw",
+                keyBuffer,
+                { name: "AES-GCM", length: 256 },
+                false,
+                ["decrypt"]
+            );
+        } catch (error) {
+            console.error('Error importing AES key:', error);
+            return null;
+        }
     }
     
-    // Functions
+    // === RSA ENCRYPTION FOR AES KEYS ===
+    
+    async function encryptText(text, publicKey) {
+        try {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(text);
+            
+            const encrypted = await window.crypto.subtle.encrypt(
+                { name: "RSA-OAEP" },
+                publicKey,
+                data
+            );
+            
+            return arrayBufferToBase64(encrypted);
+        } catch (error) {
+            console.error('Error encrypting text:', error);
+            return null;
+        }
+    }
+    
+    async function decryptText(encryptedText, privateKey) {
+        try {
+            const data = base64ToArrayBuffer(encryptedText);
+            
+            const decrypted = await window.crypto.subtle.decrypt(
+                { name: "RSA-OAEP" },
+                privateKey,
+                data
+            );
+            
+            return new TextDecoder().decode(decrypted);
+        } catch (error) {
+            console.error('Error decrypting text:', error);
+            return null;
+        }
+    }
+    
+    // === MAIN FUNCTIONS ===
+    
     function init() {
         // Focus username input
         usernameInput.focus();
@@ -230,17 +365,7 @@ document.addEventListener('DOMContentLoaded', function() {
             sendBtn.disabled = !this.value.trim() && !currentMedia;
             
             // Typing indicator
-            if (this.value.trim()) {
-                clearTimeout(typingTimeout);
-                socket.emit('typing', true);
-                
-                typingTimeout = setTimeout(() => {
-                    socket.emit('typing', false);
-                }, 2000);
-            } else {
-                clearTimeout(typingTimeout);
-                socket.emit('typing', false);
-            }
+            handleTyping(this.value.trim());
         });
         
         // Send message on Enter (but Shift+Enter for new line)
@@ -270,6 +395,23 @@ document.addEventListener('DOMContentLoaded', function() {
         window.addEventListener('resize', handleResize);
     }
     
+    function handleTyping(isTyping) {
+        if (isTyping && !typingStatus) {
+            clearTimeout(typingTimeout);
+            socket && socket.emit('typing', true);
+            typingStatus = true;
+            
+            typingTimeout = setTimeout(() => {
+                socket && socket.emit('typing', false);
+                typingStatus = false;
+            }, 2000);
+        } else if (!isTyping && typingStatus) {
+            clearTimeout(typingTimeout);
+            socket && socket.emit('typing', false);
+            typingStatus = false;
+        }
+    }
+    
     async function joinChat() {
         const username = usernameInput.value.trim();
         
@@ -278,37 +420,52 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        // Generate user key pair
-        showLoginError('🔑 Mempersiapkan enkripsi...');
-        userKeyPair = await generateKeyPair();
-        
-        if (!userKeyPair) {
-            showLoginError('Gagal mempersiapkan enkripsi. Refresh dan coba lagi.');
-            return;
-        }
-        
-        // Connect to socket
-        socket = io();
-        
-        // Socket events
-        socket.on('connect', function() {
+        try {
+            // Generate or restore key pair first
+            const keyPairResult = await generateOrRestoreKeyPair(username);
+            userKeyPair = keyPairResult;
+            
+            showLoginError('🌐 Menghubungkan ke server...');
+            
+            // Connect to socket
+            socket = io();
+            
+            // Setup socket event handlers
+            setupSocketEvents(username);
+            
+            // Wait for connection and join
             socket.emit('join', username);
+            
+        } catch (error) {
+            console.error('Error joining chat:', error);
+            showLoginError('Gagal bergabung ke chat. Silakan refresh dan coba lagi.');
+        }
+    }
+    
+    function setupSocketEvents(username) {
+        socket.on('connect', function() {
+            console.log('🌐 Connected to server');
         });
         
+        socket.on('connect_error', function(error) {
+            console.error('🌐 Connection error:', error);
+            showLoginError('Gagal terhubung ke server. Coba lagi.');
+        });
+        
+        // Key exchange events
         socket.on('server_public_key', async function(data) {
             console.log('🔑 Received server public key');
             serverPublicKey = data.serverPublicKey;
             
             // Register our public key
-            const publicKeyData = await exportPublicKey(userKeyPair.publicKey);
-            if (publicKeyData) {
-                socket.emit('register_public_key', { publicKey: publicKeyData });
-                console.log('🔑 Sent our public key to server');
+            if (userKeyPair && userKeyPair.publicKeyData) {
+                socket.emit('register_public_key', { publicKey: userKeyPair.publicKeyData });
+                console.log('🔑 Registered our public key with server');
             }
         });
         
         socket.on('all_public_keys', function(keys) {
-            console.log('🔑 Received all public keys:', Object.keys(keys));
+            console.log('🔑 Received public keys for users:', Object.keys(keys));
             userPublicKeys = keys;
         });
         
@@ -316,20 +473,31 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('🔑 Public key update for:', data.username);
             userPublicKeys[data.username] = data.publicKey;
         });
-
-        socket.on('unauthorized', () => {
-            showLoginError('Username tidak diizinkan! Hanya user yang terdaftar yang bisa masuk.');
+        
+        // Authentication responses
+        socket.on('unauthorized', function() {
+            showLoginError('❌ Username tidak diizinkan! Hanya user terdaftar yang bisa masuk.');
         });
         
         socket.on('username_taken', function() {
-            showLoginError('Nama pengguna sudah digunakan, silakan pilih yang lain');
+            showLoginError('❌ Username sudah digunakan, pilih yang lain');
         });
         
         socket.on('room_full', function() {
-            showLoginError('Chat room penuh, silakan coba lagi nanti');
+            showLoginError('❌ Chat room penuh, coba lagi nanti');
         });
         
+        // Success - show chat screen
         socket.on('load_messages', async function(messages) {
+            console.log(`📥 Loading ${messages.length} messages`);
+            
+            // Clear login screen and show chat
+            currentUser = username;
+            loginScreen.classList.add('hidden');
+            chatScreen.classList.remove('hidden');
+            messageInput.focus();
+            
+            // Load all messages
             messagesContainer.innerHTML = '';
             for (const message of messages) {
                 await displayMessage(message);
@@ -342,8 +510,8 @@ document.addEventListener('DOMContentLoaded', function() {
             scrollToBottom();
         });
         
+        // User events
         socket.on('user_list_update', function(users) {
-            onlineUsers = users; // Store online users
             updateOnlineUsers(users);
         });
         
@@ -358,32 +526,16 @@ document.addEventListener('DOMContentLoaded', function() {
         
         socket.on('messages_cleared', function() {
             messagesContainer.innerHTML = '';
-            showSystemMessage('Semua pesan telah dihapus');
+            showSystemMessage('🧹 Semua pesan telah dihapus');
         });
         
         socket.on('user_joined', function(username) {
-            showSystemMessage(`${username} bergabung dalam chat`);
+            showSystemMessage(`💕 ${username} bergabung dalam chat`);
         });
         
         socket.on('user_left', function(username) {
-            showSystemMessage(`${username} meninggalkan chat`);
+            showSystemMessage(`💔 ${username} meninggalkan chat`);
         });
-        
-        currentUser = username;
-        loginScreen.classList.add('hidden');
-        chatScreen.classList.remove('hidden');
-        messageInput.focus();
-    }
-    
-    function showLoginError(message) {
-        loginError.textContent = message;
-        if (!message.includes('🔑')) {
-            usernameInput.classList.add('error');
-            
-            setTimeout(() => {
-                usernameInput.classList.remove('error');
-            }, 1000);
-        }
     }
     
     async function sendMessage() {
@@ -392,178 +544,224 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!text && !currentMedia) return;
         
         try {
+            // Prepare message data
+            const messageData = {
+                text: text || '',
+                media: currentMedia || null,
+                timestamp: new Date().toISOString()
+            };
+            
             // Generate AES key for this message
             const aesKey = await generateAESKey();
             
-            // Encrypt message with AES
-            const messageToEncrypt = JSON.stringify({
-                text: text,
-                media: currentMedia,
-                timestamp: new Date().toISOString()
-            });
+            // Encrypt message content with AES
+            const messageString = JSON.stringify(messageData);
+            const encryptedContent = await encryptWithAES(messageString, aesKey);
             
-            const encryptedContent = await encryptWithAES(messageToEncrypt, aesKey);
-            const exportedAESKey = await exportAESKey(aesKey);
+            if (!encryptedContent) {
+                throw new Error('Failed to encrypt message content');
+            }
             
-            // Encrypt AES key for each online user (including ourselves)
+            // Export AES key to encrypt with RSA
+            const rawAesKey = await exportAESKey(aesKey);
+            if (!rawAesKey) {
+                throw new Error('Failed to export AES key');
+            }
+            
+            // Encrypt AES key for all online users (including self)
             const encryptedKeys = {};
+            const onlineUsers = getOnlineUsers();
             
-            console.log('📋 Online users:', onlineUsers.map(u => u.username));
-            console.log('🔑 Available public keys:', Object.keys(userPublicKeys));
+            console.log('🔐 Encrypting for users:', onlineUsers);
             
-            // Encrypt for all online users
-            for (const user of onlineUsers) {
-                const username = user.username;
-                console.log(`🔐 Encrypting for user: ${username}`);
-                
-                if (userPublicKeys[username]) {
-                    try {
-                        const userPublicKey = await importPublicKey(userPublicKeys[username]);
-                        if (userPublicKey) {
-                            const encryptedKey = await encryptMessage(exportedAESKey, userPublicKey);
+            for (const username of onlineUsers) {
+                try {
+                    let publicKeyData;
+                    
+                    // Use our own public key for our messages
+                    if (username === currentUser) {
+                        publicKeyData = userKeyPair.publicKeyData;
+                    } else {
+                        publicKeyData = userPublicKeys[username];
+                    }
+                    
+                    if (publicKeyData) {
+                        const publicKey = await importPublicKey(publicKeyData);
+                        if (publicKey) {
+                            const encryptedKey = await encryptText(rawAesKey, publicKey);
                             if (encryptedKey) {
                                 encryptedKeys[username] = encryptedKey;
-                                console.log(`✅ Successfully encrypted for ${username}`);
-                            } else {
-                                console.log(`❌ Failed to encrypt for ${username}`);
                             }
                         }
-                    } catch (error) {
-                        console.error(`Error encrypting for ${username}:`, error);
                     }
-                } else {
-                    console.log(`⚠️ No public key for ${username}`);
+                } catch (error) {
+                    console.error(`Error encrypting for user ${username}:`, error);
                 }
             }
             
-            console.log('🔑 Encrypted keys for:', Object.keys(encryptedKeys));
-            
-            const messageData = {
+            // Send encrypted message
+            socket.emit('new_message', {
                 type: 'encrypted',
                 encryptedContent: encryptedContent,
                 encryptedKeys: encryptedKeys,
                 media: currentMedia
-            };
+            });
             
-            socket.emit('new_message', messageData);
+            console.log('📤 Encrypted message sent');
             
             // Reset input
-            messageInput.value = '';
-            messageInput.style.height = 'auto';
-            currentMedia = null;
-            attachmentPreview.innerHTML = '';
-            sendBtn.disabled = true;
-            
-            // Reset typing
-            clearTimeout(typingTimeout);
-            socket.emit('typing', false);
-            
-            // Focus input
-            messageInput.focus();
+            resetMessageInput();
             
         } catch (error) {
-            console.error('Error sending encrypted message:', error);
+            console.error('❌ Error sending encrypted message:', error);
             showSystemMessage('❌ Gagal mengirim pesan terenkripsi');
         }
     }
     
+    function getOnlineUsers() {
+        return Array.from(onlineUsersList.children).map(li => {
+            let username = li.textContent;
+            // Clean up the username from extra text
+            username = username.replace(/\s*\(Kamu\).*$/, '');
+            username = username.replace(/\s*[🔒⚠️].*$/, '');
+            return username.trim();
+        });
+    }
+    
+    function resetMessageInput() {
+        messageInput.value = '';
+        messageInput.style.height = 'auto';
+        currentMedia = null;
+        attachmentPreview.innerHTML = '';
+        sendBtn.disabled = true;
+        
+        // Reset typing
+        clearTimeout(typingTimeout);
+        if (typingStatus) {
+            socket.emit('typing', false);
+            typingStatus = false;
+        }
+        
+        messageInput.focus();
+    }
+    
     async function displayMessage(message) {
-        const template = document.getElementById('message-template');
-        const messageEl = document.importNode(template.content, true).querySelector('.message');
-        
-        // Check if own message
-        if (message.username === currentUser) {
-            messageEl.classList.add('own');
-        }
-        
-        // Set username and time
-        messageEl.querySelector('.message-username').textContent = message.username;
-        
-        const timestamp = new Date(message.timestamp);
-        const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        messageEl.querySelector('.message-time').textContent = timeString;
-        
-        // Set content
-        const contentEl = messageEl.querySelector('.message-content');
-        
-        // Handle encrypted messages
-        if (message.type === 'encrypted') {
-            console.log('🔍 Processing encrypted message from:', message.username);
-            console.log('🔑 Available encrypted keys:', Object.keys(message.encryptedKeys || {}));
-            console.log('👤 Current user:', currentUser);
+        try {
+            const template = document.getElementById('message-template');
+            const messageEl = document.importNode(template.content, true).querySelector('.message');
             
-            try {
-                // Check if we have the encrypted key for this message
-                if (message.encryptedKeys && message.encryptedKeys[currentUser]) {
-                    console.log('🔑 Found encrypted key for current user');
-                    
-                    // Decrypt AES key
-                    const encryptedAESKey = message.encryptedKeys[currentUser];
-                    const decryptedAESKey = await decryptMessage(encryptedAESKey, userKeyPair.privateKey);
-                    
-                    if (decryptedAESKey) {
-                        console.log('✅ Successfully decrypted AES key');
-                        
-                        // Import AES key
-                        const aesKey = await importAESKey(decryptedAESKey);
-                        
-                        // Decrypt message content
-                        const decryptedContent = await decryptWithAES(
-                            message.encryptedContent.data, 
-                            aesKey, 
-                            message.encryptedContent.iv
-                        );
-                        
-                        console.log('✅ Successfully decrypted message content');
-                        
-                        const messageData = JSON.parse(decryptedContent);
-                        
-                        // Display decrypted text
-                        if (messageData.text) {
-                            contentEl.innerHTML += formatMessageText(messageData.text);
-                        }
-                        
-                        // Display media if present
-                        if (messageData.media) {
-                            displayMediaContent(contentEl, messageData.media);
-                        }
-                        
-                        // Add encryption indicator
-                        const encryptionIcon = document.createElement('span');
-                        encryptionIcon.innerHTML = ' 🔒';
-                        encryptionIcon.style.fontSize = '12px';
-                        encryptionIcon.style.opacity = '0.7';
-                        encryptionIcon.title = 'Pesan terenkripsi end-to-end';
-                        contentEl.appendChild(encryptionIcon);
-                        
-                    } else {
-                        console.log('❌ Failed to decrypt AES key');
-                        contentEl.innerHTML = '🔒 <em>Gagal mendekripsi pesan</em>';
-                    }
-                } else {
-                    console.log('❌ No encrypted key found for current user');
-                    contentEl.innerHTML = '🔒 <em>Pesan terenkripsi (kunci tidak tersedia)</em>';
-                }
-            } catch (error) {
-                console.error('Error decrypting message:', error);
-                contentEl.innerHTML = '🔒 <em>Error mendekripsi pesan</em>';
-            }
-        } 
-        // Handle regular messages (fallback)
-        else {
-            if (message.text) {
-                contentEl.innerHTML += formatMessageText(message.text);
+            // Check if own message
+            if (message.username === currentUser) {
+                messageEl.classList.add('own');
             }
             
-            if (message.media) {
-                displayMediaContent(contentEl, message.media);
+            // Set username and time
+            messageEl.querySelector('.message-username').textContent = message.username;
+            
+            const timestamp = new Date(message.timestamp);
+            const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            messageEl.querySelector('.message-time').textContent = timeString;
+            
+            // Set content
+            const contentEl = messageEl.querySelector('.message-content');
+            
+            // Handle encrypted messages
+            if (message.type === 'encrypted') {
+                await displayEncryptedMessage(message, contentEl);
             }
+            // Handle regular messages (fallback)
+            else {
+                displayRegularMessage(message, contentEl);
+            }
+            
+            messagesContainer.appendChild(messageEl);
+            
+        } catch (error) {
+            console.error('❌ Error displaying message:', error);
+        }
+    }
+    
+    async function displayEncryptedMessage(message, contentEl) {
+        try {
+            // Check if we have the encrypted key for this message
+            const encryptedKey = message.encryptedKeys && message.encryptedKeys[currentUser];
+            
+            if (!encryptedKey) {
+                contentEl.innerHTML = '🔒 <em>Pesan terenkripsi (kunci tidak tersedia)</em>';
+                console.warn('⚠️ No encryption key available for current user');
+                return;
+            }
+            
+            if (!userKeyPair || !userKeyPair.privateKey) {
+                contentEl.innerHTML = '🔒 <em>Tidak dapat membaca pesan (kunci pribadi tidak tersedia)</em>';
+                console.error('⚠️ No private key available');
+                return;
+            }
+            
+            // Decrypt AES key using RSA private key
+            const decryptedAesKeyRaw = await decryptText(encryptedKey, userKeyPair.privateKey);
+            if (!decryptedAesKeyRaw) {
+                throw new Error('Failed to decrypt AES key');
+            }
+            
+            // Import AES key
+            const decryptedAesKey = await importAESKey(decryptedAesKeyRaw);
+            if (!decryptedAesKey) {
+                throw new Error('Failed to import AES key');
+            }
+            
+            // Decrypt message content using AES
+            const decryptedContent = await decryptWithAES(
+                message.encryptedContent.encrypted,
+                message.encryptedContent.iv,
+                decryptedAesKey
+            );
+            
+            if (!decryptedContent) {
+                throw new Error('Failed to decrypt message content');
+            }
+            
+            // Parse decrypted content
+            const messageData = JSON.parse(decryptedContent);
+            
+            // Display text
+            if (messageData.text) {
+                contentEl.innerHTML += formatMessageText(messageData.text);
+            }
+            
+            // Display media
+            if (messageData.media) {
+                displayMediaContent(contentEl, messageData.media);
+            }
+            
+            // Add encryption indicator
+            const encryptionIcon = document.createElement('span');
+            encryptionIcon.innerHTML = ' 🔒';
+            encryptionIcon.style.fontSize = '12px';
+            encryptionIcon.style.opacity = '0.7';
+            encryptionIcon.style.color = '#4caf50';
+            encryptionIcon.title = 'Pesan terenkripsi end-to-end';
+            contentEl.appendChild(encryptionIcon);
+            
+        } catch (error) {
+            console.error('❌ Error decrypting message:', error);
+            contentEl.innerHTML = '🔒 <em>Gagal mendekripsi pesan</em>';
+        }
+    }
+    
+    function displayRegularMessage(message, contentEl) {
+        if (message.text) {
+            contentEl.innerHTML += formatMessageText(message.text);
         }
         
-        messagesContainer.appendChild(messageEl);
+        if (message.media) {
+            displayMediaContent(contentEl, message.media);
+        }
     }
     
     function displayMediaContent(contentEl, media) {
+        if (!media || !media.path) return;
+        
         const mediaPath = media.path;
         const fileExt = mediaPath.split('.').pop().toLowerCase();
         
@@ -607,7 +805,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     function formatMessageText(text) {
-        // Replace URLs with clickable links
         return text.replace(
             /(https?:\/\/[^\s]+)/g, 
             '<a href="\$1" target="_blank">$1</a>'
@@ -621,6 +818,18 @@ document.addEventListener('DOMContentLoaded', function() {
         messagesContainer.appendChild(messageEl);
         scrollToBottom();
     }
+    
+    function showLoginError(message) {
+        loginError.textContent = message;
+        if (!message.includes('🔑') && !message.includes('🌐') && message !== '') {
+            usernameInput.classList.add('error');
+            setTimeout(() => {
+                usernameInput.classList.remove('error');
+            }, 1000);
+        }
+    }
+    
+    // === FILE HANDLING ===
     
     function handleFileSelect(e) {
         const file = e.target.files[0];
@@ -641,7 +850,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const previewItem = document.createElement('div');
             previewItem.className = 'attachment-item';
             
-            // Check file type
             const fileType = file.type.split('/')[0];
             
             if (fileType === 'image') {
@@ -682,7 +890,6 @@ document.addEventListener('DOMContentLoaded', function() {
             previewItem.appendChild(removeBtn);
             attachmentPreview.appendChild(previewItem);
             
-            // Upload file to server
             uploadFile(file);
         };
         
@@ -697,7 +904,12 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             body: formData
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Upload failed');
+            }
+            return response.json();
+        })
         .then(data => {
             currentMedia = {
                 path: data.path,
@@ -713,6 +925,8 @@ document.addEventListener('DOMContentLoaded', function() {
             fileInput.value = '';
         });
     }
+    
+    // === UI FUNCTIONS ===
     
     function updateOnlineUsers(users) {
         onlineUsersList.innerHTML = '';
@@ -730,12 +944,14 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Add encryption status
             const encryptionStatus = document.createElement('span');
-            if (userPublicKeys[user.username]) {
+            if (userPublicKeys[user.username] || user.username === currentUser) {
                 encryptionStatus.innerHTML = ' 🔒';
                 encryptionStatus.title = 'Enkripsi aktif';
+                encryptionStatus.style.color = '#4caf50';
             } else {
                 encryptionStatus.innerHTML = ' ⚠️';
                 encryptionStatus.title = 'Enkripsi belum siap';
+                encryptionStatus.style.color = '#ff9800';
             }
             encryptionStatus.style.fontSize = '12px';
             li.appendChild(encryptionStatus);
