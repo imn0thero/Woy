@@ -437,7 +437,7 @@ process.on('SIGTERM', () => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 80;
 server.listen(PORT, () => {
   console.log(`💕💕💕 Romantic Encrypted Chat Server running on port ${PORT} 💕💕💕`);
   console.log(`🔒 End-to-End Encryption: ENABLED`);
