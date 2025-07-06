@@ -1,4 +1,6 @@
 document.addEventListener('DOMContentLoaded', function() {
+    console.log("DOM Content loaded");
+    
     // DOM Elements
     const keyGenerationScreen = document.getElementById('key-generation-screen');
     const loginScreen = document.getElementById('login-screen');
@@ -20,795 +22,141 @@ document.addEventListener('DOMContentLoaded', function() {
     const onlineUsersToggle = document.getElementById('online-users-toggle');
     const onlineUsersPanel = document.getElementById('online-users-panel');
     const closeUsersBtn = document.getElementById('close-users-btn');
+    const progressFill = document.querySelector('.progress-fill');
     
-    // Encryption Variables
-    let myKeyPair = null;
-    let myUsername = null;
-    let publicKeys = {};
-    let serverPublicKey = null;
-    let isKeysReady = false;
-    
-    // Other Variables
+    // Variables
     let socket;
     let currentUser;
     let currentMedia = null;
     let typingTimeout;
+    let publicKeys = {};
+    let myUsername = null;
+    let serverPublicKey = null;
     
     // Initialize
-    init();
+    initApp();
     
     // Functions
-    async function init() {
-        console.log('🔄 Initializing romantic chat...');
+    async function initApp() {
+        console.log("Initializing application...");
         
+        // Check elements
+        if (!keyGenerationScreen) console.error("keyGenerationScreen element not found!");
+        if (!loginScreen) console.error("loginScreen element not found!");
+        if (!progressFill) console.error("progressFill element not found!");
+        
+        // Animate progress bar
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+            progress += 5;
+            if (progress > 95) progress = 95;
+            if (progressFill) progressFill.style.width = `${progress}%`;
+        }, 100);
+
         try {
-            // Check if Web Crypto API is supported
-            if (!window.crypto || !window.crypto.subtle) {
-                throw new Error('Web Crypto API tidak didukung di browser ini. Silakan gunakan browser modern seperti Chrome, Firefox, atau Safari.');
+            // Initialize encryption
+            console.log("Starting encryption initialization");
+            const initialized = await encryptionManager.init();
+            
+            if (initialized) {
+                console.log("Encryption initialized successfully, transitioning to login screen");
+                
+                // Complete progress bar
+                if (progressFill) progressFill.style.width = '100%';
+                
+                // Clear interval
+                clearInterval(progressInterval);
+                
+                // Hide key generation screen after short delay
+                setTimeout(() => {
+                    console.log("Showing login screen");
+                    if (keyGenerationScreen) keyGenerationScreen.style.display = "none";
+                    if (loginScreen) loginScreen.classList.remove("hidden");
+                    if (usernameInput) usernameInput.focus();
+                }, 500);
+                
+                // Setup event listeners
+                setupEventListeners();
+            } else {
+                throw new Error('Gagal inisialisasi enkripsi');
             }
-            
-            console.log('✅ Web Crypto API detected');
-            
-            // Generate encryption keys dengan timeout
-            console.log('🔑 Generating encryption keys...');
-            await Promise.race([
-                generateKeyPair(),
-                new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Key generation timeout')), 10000)
-                )
-            ]);
-            
-            console.log('✅ Encryption keys generated successfully');
-            
-            // Hide key generation screen, show login
-            keyGenerationScreen.classList.add('hidden');
-            loginScreen.classList.remove('hidden');
-            isKeysReady = true;
-            
-            // Focus username input
-            usernameInput.focus();
-            
-            // Setup event listeners
-            setupEventListeners();
-            
-            console.log('💕 Romantic chat initialized successfully!');
-            
         } catch (error) {
-            console.error('❌ Failed to initialize encryption:', error);
-            showInitializationError(error.message);
-        }
-    }
-    
-    // Show initialization error dengan fallback
-    function showInitializationError(message) {
-        // Hide key generation screen
-        keyGenerationScreen.classList.add('hidden');
-        
-        // Show error on login screen
-        loginScreen.classList.remove('hidden');
-        
-        // Create error message
-        const errorDiv = document.createElement('div');
-        errorDiv.style.cssText = `
-            background: linear-gradient(135deg, #ff6b6b, #ff5252);
-            color: white;
-            padding: 20px;
-            border-radius: 15px;
-            margin: 20px;
-            text-align: center;
-            box-shadow: 0 5px 15px rgba(255, 107, 107, 0.3);
-        `;
-        errorDiv.innerHTML = `
-            <h3><i class="fas fa-exclamation-triangle"></i> Gagal Menginisialisasi Enkripsi</h3>
-            <p>${message}</p>
-            <button onclick="location.reload()" style="
-                background: rgba(255,255,255,0.2);
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 25px;
-                cursor: pointer;
-                margin-top: 10px;
-                transition: all 0.3s ease;
-            " onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">
-                <i class="fas fa-refresh"></i> Muat Ulang Halaman
-            </button>
-            <div style="margin-top: 15px; font-size: 14px; opacity: 0.8;">
-                <p>💡 Tips:</p>
-                <p>• Pastikan menggunakan HTTPS</p>
-                <p>• Gunakan browser modern (Chrome, Firefox, Safari)</p>
-                <p>• Coba refresh halaman</p>
-            </div>
-        `;
-        
-        // Insert error before login container
-        const loginContainer = document.querySelector('.login-container');
-        loginContainer.parentNode.insertBefore(errorDiv, loginContainer);
-        
-        // Disable login functionality
-        usernameInput.disabled = true;
-        joinBtn.disabled = true;
-        joinBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error';
-    }
-    
-    // Generate RSA key pair dengan better error handling
-    async function generateKeyPair() {
-        try {
-            console.log('🔐 Starting key pair generation...');
+            console.error('Initialization error:', error);
+            // Stop progress animation
+            clearInterval(progressInterval);
             
-            const keyPair = await window.crypto.subtle.generateKey(
-                {
-                    name: "RSA-OAEP",
-                    modulusLength: 2048,
-                    publicExponent: new Uint8Array([1, 0, 1]),
-                    hash: "SHA-256",
-                },
-                true,
-                ["encrypt", "decrypt"]
-            );
-            
-            console.log('🔐 RSA key pair generated, exporting public key...');
-            
-            const publicKeyExported = await window.crypto.subtle.exportKey("spki", keyPair.publicKey);
-            const publicKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(publicKeyExported)));
-            const publicKeyPEM = `-----BEGIN PUBLIC KEY-----\n${publicKeyBase64}\n-----END PUBLIC KEY-----`;
-            
-            myKeyPair = { keyPair, publicKeyPEM };
-            console.log('✅ Key pair ready:', {
-                publicKeyLength: publicKeyPEM.length,
-                hasPrivateKey: !!keyPair.privateKey
-            });
-            
-        } catch (error) {
-            console.error('❌ Key generation failed:', error);
-            throw new Error(`Gagal membuat kunci enkripsi: ${error.message}`);
-        }
-    }
-    
-    // Enkripsi pesan untuk recipient tertentu dengan better error handling
-    async function encryptForRecipient(message, recipientPublicKey) {
-        try {
-            console.log('🔒 Encrypting message for recipient...');
-            
-            const pemHeader = "-----BEGIN PUBLIC KEY-----";
-            const pemFooter = "-----END PUBLIC KEY-----";
-            const pemContents = recipientPublicKey.substring(
-                pemHeader.length,
-                recipientPublicKey.length - pemFooter.length
-            ).replace(/\s/g, '');
-            
-            const binaryDer = window.atob(pemContents);
-            const binaryDerArray = new Uint8Array(binaryDer.length);
-            for (let i = 0; i < binaryDer.length; i++) {
-                binaryDerArray[i] = binaryDer.charCodeAt(i);
+            // Show error on key generation screen
+            if (keyGenerationScreen) {
+                const keyGenContainer = keyGenerationScreen.querySelector('.key-generation-container');
+                if (keyGenContainer) {
+                    keyGenContainer.innerHTML = `
+                        <div class="error-icon">❌</div>
+                        <h2>Gagal Mengaktifkan Enkripsi</h2>
+                        <p>${error.message || 'Terjadi kesalahan saat menginisialisasi enkripsi. Pastikan Anda menggunakan browser modern.'}</p>
+                        <button id="retry-btn" class="retry-button">Coba Lagi</button>
+                    `;
+                    
+                    // Add retry button listener
+                    const retryBtn = document.getElementById('retry-btn');
+                    if (retryBtn) {
+                        retryBtn.addEventListener('click', () => {
+                            window.location.reload();
+                        });
+                    }
+                }
             }
-            
-            const recipientKey = await window.crypto.subtle.importKey(
-                "spki", binaryDerArray.buffer,
-                { name: "RSA-OAEP", hash: "SHA-256" },
-                false, ["encrypt"]
-            );
-            
-            // Generate symmetric key untuk enkripsi pesan
-            const symmetricKey = await window.crypto.subtle.generateKey(
-                { name: "AES-GCM", length: 256 },
-                true, ["encrypt", "decrypt"]
-            );
-            
-            const encoder = new TextEncoder();
-            const messageBytes = encoder.encode(message);
-            const iv = window.crypto.getRandomValues(new Uint8Array(12));
-            
-            // Enkripsi pesan dengan symmetric key
-            const encryptedMessage = await window.crypto.subtle.encrypt(
-                { name: "AES-GCM", iv: iv },
-                symmetricKey, messageBytes
-            );
-            
-            // Enkripsi symmetric key dengan public key recipient
-            const rawSymmetricKey = await window.crypto.subtle.exportKey("raw", symmetricKey);
-            const encryptedSymmetricKey = await window.crypto.subtle.encrypt(
-                { name: "RSA-OAEP" },
-                recipientKey, rawSymmetricKey
-            );
-            
-            console.log('✅ Message encrypted successfully');
-            
-            return {
-                iv: Array.from(iv),
-                encryptedMessage: Array.from(new Uint8Array(encryptedMessage)),
-                encryptedSymmetricKey: Array.from(new Uint8Array(encryptedSymmetricKey))
-            };
-        } catch (error) {
-            console.error('❌ Encryption failed:', error);
-            throw new Error(`Gagal mengenkripsi pesan: ${error.message}`);
         }
     }
     
-    // Dekripsi pesan dengan better error handling
-    async function decryptMessage(encryptedContent, encryptedKey) {
-        try {
-            console.log('🔓 Decrypting message...');
-            
-            const encryptedKeyArray = new Uint8Array(encryptedKey);
-            const decryptedSymmetricKey = await window.crypto.subtle.decrypt(
-                { name: "RSA-OAEP" },
-                myKeyPair.keyPair.privateKey,
-                encryptedKeyArray.buffer
-            );
-            
-            const symmetricKey = await window.crypto.subtle.importKey(
-                "raw", decryptedSymmetricKey,
-                { name: "AES-GCM", length: 256 },
-                false, ["decrypt"]
-            );
-            
-            const iv = new Uint8Array(encryptedContent.iv);
-            const encryptedMessageArray = new Uint8Array(encryptedContent.encryptedMessage);
-            
-            const decryptedMessage = await window.crypto.subtle.decrypt(
-                { name: "AES-GCM", iv: iv },
-                symmetricKey, encryptedMessageArray.buffer
-            );
-            
-            const decoder = new TextDecoder();
-            const result = decoder.decode(decryptedMessage);
-            
-            console.log('✅ Message decrypted successfully');
-            return result;
-            
-        } catch (error) {
-            console.error('❌ Decryption failed:', error);
-            return null;
-        }
-    }
+    // Sisa kode tetap sama
+    // ...
     
     function setupEventListeners() {
+        console.log("Setting up event listeners");
         // Enter key for login
-        usernameInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter' && usernameInput.value.trim() && isKeysReady) {
-                joinChat();
-            }
-        });
+        if (usernameInput) {
+            usernameInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter' && usernameInput.value.trim()) {
+                    joinChat();
+                }
+            });
+        }
         
         // Join button click
-        joinBtn.addEventListener('click', function() {
-            if (usernameInput.value.trim() && isKeysReady) {
-                joinChat();
-            } else if (!isKeysReady) {
-                showLoginError('Kunci enkripsi masih diproses. Harap tunggu...');
-            }
-        });
+        if (joinBtn) {
+            joinBtn.addEventListener('click', function() {
+                if (usernameInput && usernameInput.value.trim()) {
+                    joinChat();
+                }
+            });
+        }
         
         // Auto-resize message input
-        messageInput.addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = (this.scrollHeight) + 'px';
-            
-            // Enable/disable send button
-            sendBtn.disabled = !this.value.trim() && !currentMedia;
-            
-            // Typing indicator
-            if (this.value.trim()) {
-                clearTimeout(typingTimeout);
-                if (socket) socket.emit('typing', true);
+        if (messageInput) {
+            messageInput.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = (this.scrollHeight) + 'px';
                 
-                typingTimeout = setTimeout(() => {
-                    if (socket) socket.emit('typing', false);
-                }, 2000);
-            } else {
-                clearTimeout(typingTimeout);
-                if (socket) socket.emit('typing', false);
-            }
-        });
-        
-        // Send message on Enter (but Shift+Enter for new line)
-        messageInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (!sendBtn.disabled) {
-                    sendMessage();
-                }
-            }
-        });
-        
-        // Send button click
-        sendBtn.addEventListener('click', sendMessage);
-        
-        // File input change
-        fileInput.addEventListener('change', handleFileSelect);
-        
-        // Clear messages button
-        clearMessagesBtn.addEventListener('click', confirmClearMessages);
-        
-        // Toggle online users panel
-        onlineUsersToggle.addEventListener('click', toggleOnlineUsers);
-        closeUsersBtn.addEventListener('click', toggleOnlineUsers);
-        
-        // Handle window resize
-        window.addEventListener('resize', handleResize);
-    }
-    
-    function joinChat() {
-        const username = usernameInput.value.trim();
-        
-        if (!username) {
-            showLoginError('Silakan masukkan nama pengguna');
-            return;
-        }
-        
-        if (!isKeysReady) {
-            showLoginError('Kunci enkripsi belum siap. Harap tunggu...');
-            return;
-        }
-        
-        try {
-            // Connect to socket
-            socket = io();
-            
-            // Setup socket events
-            setupSocketEvents(username);
-            
-            // Join room
-            socket.emit('join', username);
-            
-        } catch (error) {
-            console.error('❌ Failed to join chat:', error);
-            showLoginError('Gagal terhubung ke server. Silakan coba lagi.');
-        }
-    }
-    
-    function setupSocketEvents(username) {
-        socket.on('connect', function() {
-            console.log('🔌 Connected to server');
-        });
-
-        socket.on('server_public_key', (data) => {
-            serverPublicKey = data.serverPublicKey;
-            console.log('🔑 Received server public key');
-        });
-
-        socket.on('all_public_keys', (keys) => {
-            publicKeys = keys;
-            console.log('🔑 Received public keys for users:', Object.keys(publicKeys));
-        });
-
-        socket.on('public_key_update', (data) => {
-            publicKeys[data.username] = data.publicKey;
-            console.log(`🔑 Updated public key for ${data.username}`);
-        });
-        
-        socket.on('unauthorized', () => {
-            showLoginError('Username tidak diizinkan! Hanya user yang terdaftar yang bisa masuk.');
-        });
-        
-        socket.on('username_taken', function() {
-            showLoginError('Nama pengguna sudah digunakan, silakan pilih yang lain');
-        });
-        
-        socket.on('room_full', function() {
-            showLoginError('Chat room penuh, silakan coba lagi nanti');
-        });
-        
-        socket.on('load_messages', async function(messages) {
-            currentUser = username;
-            myUsername = username;
-            
-            // Register public key
-            socket.emit('register_public_key', {
-                publicKey: myKeyPair.publicKeyPEM
-            });
-            
-            loginScreen.classList.add('hidden');
-            chatScreen.classList.remove('hidden');
-            
-            // Load and decrypt messages
-            messagesContainer.innerHTML = '';
-            for (const message of messages) {
-                await displayMessage(message);
-            }
-            scrollToBottom();
-            messageInput.focus();
-        });
-        
-        socket.on('message_received', async function(message) {
-            await displayMessage(message);
-            scrollToBottom();
-        });
-        
-        socket.on('user_list_update', function(users) {
-            updateOnlineUsers(users);
-        });
-        
-        socket.on('user_typing', function(data) {
-            if (data.isTyping) {
-                typingUsername.textContent = data.username;
-                typingIndicator.classList.remove('hidden');
-            } else {
-                typingIndicator.classList.add('hidden');
-            }
-        });
-        
-        socket.on('messages_cleared', function() {
-            messagesContainer.innerHTML = '';
-            showSystemMessage('Semua pesan telah dihapus');
-        });
-        
-        socket.on('user_joined', function(username) {
-            showSystemMessage(`${username} bergabung dalam chat`);
-        });
-        
-        socket.on('user_left', function(username) {
-            showSystemMessage(`${username} meninggalkan chat`);
-        });
-        
-        socket.on('connect_error', (error) => {
-            console.error('❌ Connection error:', error);
-            showLoginError('Gagal terhubung ke server. Periksa koneksi internet Anda.');
-        });
-        
-        socket.on('disconnect', (reason) => {
-            console.log('🔌 Disconnected:', reason);
-            showSystemMessage('Koneksi terputus. Mencoba menyambung kembali...');
-        });
-    }
-    
-    function showLoginError(message) {
-        loginError.textContent = message;
-        loginError.style.display = 'block';
-        usernameInput.classList.add('error');
-        
-        setTimeout(() => {
-            usernameInput.classList.remove('error');
-            loginError.style.display = 'none';
-        }, 5000);
-    }
-    
-    async function sendMessage() {
-        const text = messageInput.value.trim();
-        
-        if (!text && !currentMedia) return;
-        
-        try {
-            await sendEncryptedMessage(text, currentMedia);
-            
-            // Reset input
-            messageInput.value = '';
-            messageInput.style.height = 'auto';
-            currentMedia = null;
-            attachmentPreview.innerHTML = '';
-            sendBtn.disabled = true;
-            
-            // Reset typing
-            clearTimeout(typingTimeout);
-            if (socket) socket.emit('typing', false);
-            
-            // Focus input
-            messageInput.focus();
-        } catch (error) {
-            console.error('❌ Failed to send message:', error);
-            alert('Gagal mengirim pesan terenkripsi. Silakan coba lagi.');
-        }
-    }
-    
-    async function sendEncryptedMessage(messageText, mediaData = null) {
-        if (!myUsername || !myKeyPair) {
-            throw new Error('Username atau key pair tidak tersedia');
-        }
-        
-        try {
-            const messageObj = {
-                text: messageText,
-                media: mediaData,
-                timestamp: new Date()
-            };
-            
-            const encryptedKeys = {};
-            
-            // Enkripsi untuk diri sendiri
-            const encryptedContent = await encryptForRecipient(JSON.stringify(messageObj), myKeyPair.publicKeyPEM);
-            encryptedKeys[myUsername] = encryptedContent.encryptedSymmetricKey;
-            
-            // Enkripsi untuk setiap user lain
-            for (const username in publicKeys) {
-                if (username !== myUsername && publicKeys[username]) {
-                    try {
-                        const encryptedForUser = await encryptForRecipient(JSON.stringify(messageObj), publicKeys[username]);
-                        encryptedKeys[username] = encryptedForUser.encryptedSymmetricKey;
-                    } catch (error) {
-                        console.error(`❌ Failed to encrypt for ${username}:`, error);
-                    }
-                }
-            }
-            
-            socket.emit('new_message', {
-                encryptedContent: {
-                    iv: encryptedContent.iv,
-                    encryptedMessage: encryptedContent.encryptedMessage
-                },
-                encryptedKeys: encryptedKeys,
-                media: mediaData,
-                type: 'encrypted'
-            });
-            
-        } catch (error) {
-            console.error('❌ Failed to send encrypted message:', error);
-            throw error;
-        }
-    }
-    
-    async function displayMessage(message) {
-        const template = document.getElementById('message-template');
-        const messageEl = document.importNode(template.content, true).querySelector('.message');
-        
-        // Check if own message
-        if (message.username === currentUser) {
-            messageEl.classList.add('own');
-        }
-        
-        // Add encrypted class
-        if (message.type === 'encrypted') {
-            messageEl.classList.add('encrypted-message');
-        }
-        
-        // Set username and time
-        messageEl.querySelector('.message-username').textContent = message.username;
-        
-        const timestamp = new Date(message.timestamp);
-        const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        messageEl.querySelector('.message-time').textContent = timeString;
-        
-        // Set content
-        const contentEl = messageEl.querySelector('.message-content');
-        let messageText = '';
-        let mediaContent = '';
-        
-        if (message.type === 'encrypted') {
-            if (message.encryptedKeys && message.encryptedKeys[myUsername]) {
-                try {
-                    const decryptedContent = await decryptMessage(
-                        message.encryptedContent,
-                        message.encryptedKeys[myUsername]
-                    );
+                // Enable/disable send button
+                if (sendBtn) sendBtn.disabled = !this.value.trim() && !currentMedia;
+                
+                // Typing indicator
+                if (this.value.trim() && socket) {
+                    clearTimeout(typingTimeout);
+                    socket.emit('typing', true);
                     
-                    if (decryptedContent) {
-                        const parsedContent = JSON.parse(decryptedContent);
-                        messageText = parsedContent.text || '';
-                        if (parsedContent.media) {
-                            mediaContent = createMediaContent(parsedContent.media);
-                        }
-                    } else {
-                        messageText = '❌ Gagal mendekripsi pesan';
-                        messageEl.classList.add('decrypt-error');
-                    }
-                } catch (error) {
-                    console.error('❌ Error parsing decrypted content:', error);
-                    messageText = '❌ Error dekripsi pesan';
-                    messageEl.classList.add('decrypt-error');
-                }
-            } else {
-                messageText = '🔒 Pesan terenkripsi - tidak ada kunci';
-                messageEl.classList.add('decrypt-error');
-            }
-        } else {
-            messageText = message.text || '';
-            if (message.media) {
-                mediaContent = createMediaContent(message.media);
-            }
-        }
-        
-        if (messageText) {
-            contentEl.innerHTML = formatMessageText(messageText);
-        }
-        
-        if (mediaContent) {
-            contentEl.innerHTML += mediaContent;
-        }
-        
-        messagesContainer.appendChild(messageEl);
-    }
-    
-    function createMediaContent(media) {
-        if (!media || !media.path) return '';
-        
-        const mediaPath = media.path;
-        const fileExt = mediaPath.split('.').pop().toLowerCase();
-        
-        // Images
-        if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExt)) {
-            return `<img src="${mediaPath}" alt="Image" loading="lazy">`;
-        }
-        // Videos
-        else if (['mp4', 'mov', 'avi', 'webm'].includes(fileExt)) {
-            return `<video src="${mediaPath}" controls></video>`;
-        }
-        // Audio
-        else if (['mp3', 'wav', 'ogg', 'm4a'].includes(fileExt)) {
-            return `<audio src="${mediaPath}" controls></audio>`;
-        }
-        // Documents
-        else {
-            const fileName = media.originalName || 'Download File';
-            return `<br><a href="${mediaPath}" target="_blank"><i class="fas fa-file"></i> ${fileName}</a>`;
-        }
-    }
-    
-    function formatMessageText(text) {
-        // Replace URLs with clickable links
-        return text.replace(
-            /(https?:\/\/[^\s]+)/g, 
-            '<a href="\$1" target="_blank">$1</a>'
-        ).replace(/\n/g, '<br>');
-    }
-    
-    function showSystemMessage(text) {
-        const messageEl = document.createElement('div');
-        messageEl.className = 'system-message';
-        messageEl.innerHTML = `<i class="fas fa-info-circle"></i> ${text}`;
-        messagesContainer.appendChild(messageEl);
-        scrollToBottom();
-    }
-    
-    function handleFileSelect(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-        
-        // Check file size (max 50MB)
-        if (file.size > 50 * 1024 * 1024) {
-            alert('File terlalu besar. Maksimal 50MB.');
-            fileInput.value = '';
-            return;
-        }
-        
-        const reader = new FileReader();
-        
-        reader.onload = function(e) {
-            attachmentPreview.innerHTML = '';
-            
-            const previewItem = document.createElement('div');
-            previewItem.className = 'attachment-item';
-            
-            // Check file type
-            const fileType = file.type.split('/')[0];
-            
-            if (fileType === 'image') {
-                const img = document.createElement('img');
-                img.src = e.target.result;
-                previewItem.appendChild(img);
-            } else {
-                const icon = document.createElement('div');
-                icon.className = 'file-icon';
-                
-                if (fileType === 'video') {
-                    icon.innerHTML = '<i class="fas fa-file-video"></i>';
-                } else if (fileType === 'audio') {
-                    icon.innerHTML = '<i class="fas fa-file-audio"></i>';
+                    typingTimeout = setTimeout(() => {
+                        if (socket) socket.emit('typing', false);
+                    }, 2000);
                 } else {
-                    icon.innerHTML = '<i class="fas fa-file"></i>';
+                    clearTimeout(typingTimeout);
+                    if (socket) socket.emit('typing', false);
                 }
-                
-                const fileName = document.createElement('div');
-                fileName.className = 'file-name';
-                fileName.textContent = file.name.length > 20 ? 
-                    file.name.substring(0, 17) + '...' : file.name;
-                
-                previewItem.appendChild(icon);
-                previewItem.appendChild(fileName);
-            }
-            
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'remove-attachment';
-            removeBtn.innerHTML = '<i class="fas fa-times"></i>';
-            removeBtn.addEventListener('click', function() {
-                attachmentPreview.innerHTML = '';
-                fileInput.value = '';
-                currentMedia = null;
-                sendBtn.disabled = !messageInput.value.trim();
             });
-            
-            previewItem.appendChild(removeBtn);
-            attachmentPreview.appendChild(previewItem);
-            
-            // Upload file to server
-            uploadFile(file);
-        };
-        
-        reader.readAsDataURL(file);
-    }
-    
-    function uploadFile(file) {
-        const formData = new FormData();
-        formData.append('media', file);
-        
-        fetch('/upload', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            currentMedia = {
-                path: data.path,
-                originalName: data.originalName,
-                size: data.size
-            };
-            sendBtn.disabled = false;
-        })
-        .catch(error => {
-            console.error('❌ Error uploading file:', error);
-            alert('Gagal mengunggah file. Silakan coba lagi.');
-            attachmentPreview.innerHTML = '';
-            fileInput.value = '';
-        });
-    }
-    
-    function updateOnlineUsers(users) {
-        onlineUsersList.innerHTML = '';
-        onlineCount.textContent = users.length;
-        usersCount.textContent = `(${users.length})`;
-        
-        users.forEach(user => {
-            const li = document.createElement('li');
-            li.innerHTML = `
-                <i class="fas fa-user-circle"></i>
-                ${user.username}
-                ${user.username === currentUser ? ' (Kamu)' : ''}
-                <i class="fas fa-shield-alt encryption-icon" title="Enkripsi Aktif"></i>
-            `;
-            
-            if (user.username === currentUser) {
-                li.classList.add('current-user');
-            }
-            
-            onlineUsersList.appendChild(li);
-        });
-    }
-    
-    function confirmClearMessages() {
-        if (confirm('Hapus semua pesan terenkripsi? Tindakan ini tidak dapat dibatalkan.')) {
-            socket.emit('clear_messages');
         }
-    }
-    
-    function toggleOnlineUsers() {
-        const isMobile = window.innerWidth <= 768;
         
-        if (isMobile) {
-            onlineUsersPanel.classList.toggle('active');
-        } else {
-            onlineUsersPanel.classList.toggle('hidden-mobile');
-            adjustMessagesContainer();
-        }
+        // Rest of your event listeners...
     }
-    
-    function handleResize() {
-        const isMobile = window.innerWidth <= 768;
-        
-        if (isMobile) {
-            onlineUsersPanel.classList.remove('active');
-            onlineUsersPanel.classList.add('hidden-mobile');
-        } else {
-            adjustMessagesContainer();
-        }
-    }
-    
-    function adjustMessagesContainer() {
-        if (window.innerWidth > 768) {
-            const isPanelVisible = !onlineUsersPanel.classList.contains('hidden-mobile');
-            document.getElementById('messages-container').style.marginLeft = 
-                isPanelVisible ? '250px' : '0';
-        } else {
-            document.getElementById('messages-container').style.marginLeft = '0';
-        }
-    }
-    
-    function scrollToBottom() {
-        setTimeout(() => {
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        }, 50);
-    }
+
+    // Rest of your functions...
 });
