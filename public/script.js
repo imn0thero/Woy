@@ -1,5 +1,6 @@
 document.addEventListener('DOMContentLoaded', function() {
     // DOM Elements
+    const keyGenerationScreen = document.getElementById('key-generation-screen');
     const loginScreen = document.getElementById('login-screen');
     const chatScreen = document.getElementById('chat-screen');
     const usernameInput = document.getElementById('username-input');
@@ -20,7 +21,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const onlineUsersPanel = document.getElementById('online-users-panel');
     const closeUsersBtn = document.getElementById('close-users-btn');
     
-    // Variables
+    // Encryption Variables
+    let myKeyPair = null;
+    let myUsername = null;
+    let publicKeys = {};
+    let serverPublicKey = null;
+    let isKeysReady = false;
+    
+    // Other Variables
     let socket;
     let currentUser;
     let currentMedia = null;
@@ -30,21 +38,151 @@ document.addEventListener('DOMContentLoaded', function() {
     init();
     
     // Functions
-    function init() {
-        // Focus username input
-        usernameInput.focus();
+    async function init() {
+        try {
+            // Generate encryption keys
+            await generateKeyPair();
+            
+            // Hide key generation screen, show login
+            keyGenerationScreen.classList.add('hidden');
+            loginScreen.classList.remove('hidden');
+            isKeysReady = true;
+            
+            // Focus username input
+            usernameInput.focus();
+            
+            // Setup event listeners
+            setupEventListeners();
+            
+        } catch (error) {
+            console.error('Failed to initialize encryption:', error);
+            alert('Gagal menginisialisasi enkripsi. Silakan refresh halaman.');
+        }
+    }
+    
+    // Generate RSA key pair untuk enkripsi
+    async function generateKeyPair() {
+        const keyPair = await window.crypto.subtle.generateKey(
+            {
+                name: "RSA-OAEP",
+                modulusLength: 2048,
+                publicExponent: new Uint8Array([1, 0, 1]),
+                hash: "SHA-256",
+            },
+            true,
+            ["encrypt", "decrypt"]
+        );
         
+        const publicKeyExported = await window.crypto.subtle.exportKey("spki", keyPair.publicKey);
+        const publicKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(publicKeyExported)));
+        const publicKeyPEM = `-----BEGIN PUBLIC KEY-----\n${publicKeyBase64}\n-----END PUBLIC KEY-----`;
+        
+        myKeyPair = { keyPair, publicKeyPEM };
+        console.log('🔒 Encryption keys generated successfully');
+    }
+    
+    // Enkripsi pesan untuk recipient tertentu
+    async function encryptForRecipient(message, recipientPublicKey) {
+        try {
+            const pemHeader = "-----BEGIN PUBLIC KEY-----";
+            const pemFooter = "-----END PUBLIC KEY-----";
+            const pemContents = recipientPublicKey.substring(
+                pemHeader.length,
+                recipientPublicKey.length - pemFooter.length
+            ).replace(/\s/g, '');
+            
+            const binaryDer = window.atob(pemContents);
+            const binaryDerArray = new Uint8Array(binaryDer.length);
+            for (let i = 0; i < binaryDer.length; i++) {
+                binaryDerArray[i] = binaryDer.charCodeAt(i);
+            }
+            
+            const recipientKey = await window.crypto.subtle.importKey(
+                "spki", binaryDerArray.buffer,
+                { name: "RSA-OAEP", hash: "SHA-256" },
+                false, ["encrypt"]
+            );
+            
+            // Generate symmetric key untuk enkripsi pesan
+            const symmetricKey = await window.crypto.subtle.generateKey(
+                { name: "AES-GCM", length: 256 },
+                true, ["encrypt", "decrypt"]
+            );
+            
+            const encoder = new TextEncoder();
+            const messageBytes = encoder.encode(message);
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            
+            // Enkripsi pesan dengan symmetric key
+            const encryptedMessage = await window.crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv },
+                symmetricKey, messageBytes
+            );
+            
+            // Enkripsi symmetric key dengan public key recipient
+            const rawSymmetricKey = await window.crypto.subtle.exportKey("raw", symmetricKey);
+            const encryptedSymmetricKey = await window.crypto.subtle.encrypt(
+                { name: "RSA-OAEP" },
+                recipientKey, rawSymmetricKey
+            );
+            
+            return {
+                iv: Array.from(iv),
+                encryptedMessage: Array.from(new Uint8Array(encryptedMessage)),
+                encryptedSymmetricKey: Array.from(new Uint8Array(encryptedSymmetricKey))
+            };
+        } catch (error) {
+            console.error('Encryption failed:', error);
+            throw error;
+        }
+    }
+    
+    // Dekripsi pesan
+    async function decryptMessage(encryptedContent, encryptedKey) {
+        try {
+            const encryptedKeyArray = new Uint8Array(encryptedKey);
+            const decryptedSymmetricKey = await window.crypto.subtle.decrypt(
+                { name: "RSA-OAEP" },
+                myKeyPair.keyPair.privateKey,
+                encryptedKeyArray.buffer
+            );
+            
+            const symmetricKey = await window.crypto.subtle.importKey(
+                "raw", decryptedSymmetricKey,
+                { name: "AES-GCM", length: 256 },
+                false, ["decrypt"]
+            );
+            
+            const iv = new Uint8Array(encryptedContent.iv);
+            const encryptedMessageArray = new Uint8Array(encryptedContent.encryptedMessage);
+            
+            const decryptedMessage = await window.crypto.subtle.decrypt(
+                { name: "AES-GCM", iv: iv },
+                symmetricKey, encryptedMessageArray.buffer
+            );
+            
+            const decoder = new TextDecoder();
+            return decoder.decode(decryptedMessage);
+        } catch (error) {
+            console.error("Decryption failed:", error);
+            return null;
+        }
+    }
+    
+    function setupEventListeners() {
         // Enter key for login
         usernameInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter' && usernameInput.value.trim()) {
+            if (e.key === 'Enter' && usernameInput.value.trim() && isKeysReady) {
                 joinChat();
             }
         });
         
         // Join button click
         joinBtn.addEventListener('click', function() {
-            if (usernameInput.value.trim()) {
+            if (usernameInput.value.trim() && isKeysReady) {
                 joinChat();
+            } else if (!isKeysReady) {
+                showLoginError('Kunci enkripsi masih diproses. Harap tunggu...');
             }
         });
         
@@ -105,12 +243,43 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
+        if (!isKeysReady) {
+            showLoginError('Kunci enkripsi belum siap. Harap tunggu...');
+            return;
+        }
+        
         // Connect to socket
         socket = io();
         
-        // Socket events
+        // Setup socket events
+        setupSocketEvents(username);
+        
+        // Join room
+        socket.emit('join', username);
+    }
+    
+    function setupSocketEvents(username) {
         socket.on('connect', function() {
-            socket.emit('join', username);
+            console.log('🔌 Connected to server');
+        });
+
+        socket.on('server_public_key', (data) => {
+            serverPublicKey = data.serverPublicKey;
+            console.log('🔑 Received server public key');
+        });
+
+        socket.on('all_public_keys', (keys) => {
+            publicKeys = keys;
+            console.log('🔑 Received public keys for users:', Object.keys(publicKeys));
+        });
+
+        socket.on('public_key_update', (data) => {
+            publicKeys[data.username] = data.publicKey;
+            console.log(`🔑 Updated public key for ${data.username}`);
+        });
+        
+        socket.on('unauthorized', () => {
+            showLoginError('Username tidak diizinkan! Hanya user yang terdaftar yang bisa masuk.');
         });
         
         socket.on('username_taken', function() {
@@ -121,14 +290,29 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoginError('Chat room penuh, silakan coba lagi nanti');
         });
         
-        socket.on('load_messages', function(messages) {
+        socket.on('load_messages', async function(messages) {
+            currentUser = username;
+            myUsername = username;
+            
+            // Register public key
+            socket.emit('register_public_key', {
+                publicKey: myKeyPair.publicKeyPEM
+            });
+            
+            loginScreen.classList.add('hidden');
+            chatScreen.classList.remove('hidden');
+            
+            // Load and decrypt messages
             messagesContainer.innerHTML = '';
-            messages.forEach(displayMessage);
+            for (const message of messages) {
+                await displayMessage(message);
+            }
             scrollToBottom();
+            messageInput.focus();
         });
         
-        socket.on('message_received', function(message) {
-            displayMessage(message);
+        socket.on('message_received', async function(message) {
+            await displayMessage(message);
             scrollToBottom();
         });
         
@@ -157,11 +341,6 @@ document.addEventListener('DOMContentLoaded', function() {
         socket.on('user_left', function(username) {
             showSystemMessage(`${username} meninggalkan chat`);
         });
-        
-        currentUser = username;
-        loginScreen.classList.add('hidden');
-        chatScreen.classList.remove('hidden');
-        messageInput.focus();
     }
     
     function showLoginError(message) {
@@ -173,41 +352,89 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 1000);
     }
     
-    function sendMessage() {
+    async function sendMessage() {
         const text = messageInput.value.trim();
         
         if (!text && !currentMedia) return;
         
-        const messageData = {
-            text: text,
-            type: currentMedia ? 'media' : 'text',
-            media: currentMedia
-        };
-        
-        socket.emit('new_message', messageData);
-        
-        // Reset input
-        messageInput.value = '';
-        messageInput.style.height = 'auto';
-        currentMedia = null;
-        attachmentPreview.innerHTML = '';
-        sendBtn.disabled = true;
-        
-        // Reset typing
-        clearTimeout(typingTimeout);
-        socket.emit('typing', false);
-        
-        // Focus input
-        messageInput.focus();
+        try {
+            await sendEncryptedMessage(text, currentMedia);
+            
+            // Reset input
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+            currentMedia = null;
+            attachmentPreview.innerHTML = '';
+            sendBtn.disabled = true;
+            
+            // Reset typing
+            clearTimeout(typingTimeout);
+            socket.emit('typing', false);
+            
+            // Focus input
+            messageInput.focus();
+        } catch (error) {
+            console.error('Failed to send message:', error);
+            alert('Gagal mengirim pesan terenkripsi. Silakan coba lagi.');
+        }
     }
     
-    function displayMessage(message) {
+    async function sendEncryptedMessage(messageText, mediaData = null) {
+        if (!myUsername || !myKeyPair) return;
+        
+        try {
+            const messageObj = {
+                text: messageText,
+                media: mediaData,
+                timestamp: new Date()
+            };
+            
+            const encryptedKeys = {};
+            
+            // Enkripsi untuk diri sendiri
+            const encryptedContent = await encryptForRecipient(JSON.stringify(messageObj), myKeyPair.publicKeyPEM);
+            encryptedKeys[myUsername] = encryptedContent.encryptedSymmetricKey;
+            
+            // Enkripsi untuk setiap user lain
+            for (const username in publicKeys) {
+                if (username !== myUsername && publicKeys[username]) {
+                    try {
+                        const encryptedForUser = await encryptForRecipient(JSON.stringify(messageObj), publicKeys[username]);
+                        encryptedKeys[username] = encryptedForUser.encryptedSymmetricKey;
+                    } catch (error) {
+                        console.error(`Failed to encrypt for ${username}:`, error);
+                    }
+                }
+            }
+            
+            socket.emit('new_message', {
+                encryptedContent: {
+                    iv: encryptedContent.iv,
+                    encryptedMessage: encryptedContent.encryptedMessage
+                },
+                encryptedKeys: encryptedKeys,
+                media: mediaData,
+                type: 'encrypted'
+            });
+            
+        } catch (error) {
+            console.error('Failed to send encrypted message:', error);
+            throw error;
+        }
+    }
+    
+    async function displayMessage(message) {
         const template = document.getElementById('message-template');
         const messageEl = document.importNode(template.content, true).querySelector('.message');
         
         // Check if own message
         if (message.username === currentUser) {
             messageEl.classList.add('own');
+        }
+        
+        // Add encrypted class
+        if (message.type === 'encrypted') {
+            messageEl.classList.add('encrypted-message');
         }
         
         // Set username and time
@@ -219,56 +446,76 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Set content
         const contentEl = messageEl.querySelector('.message-content');
+        let messageText = '';
+        let mediaContent = '';
         
-        if (message.text) {
-            contentEl.innerHTML += formatMessageText(message.text);
+        if (message.type === 'encrypted') {
+            if (message.encryptedKeys && message.encryptedKeys[myUsername]) {
+                try {
+                    const decryptedContent = await decryptMessage(
+                        message.encryptedContent,
+                        message.encryptedKeys[myUsername]
+                    );
+                    
+                    if (decryptedContent) {
+                        const parsedContent = JSON.parse(decryptedContent);
+                        messageText = parsedContent.text || '';
+                        if (parsedContent.media) {
+                            mediaContent = createMediaContent(parsedContent.media);
+                        }
+                    } else {
+                        messageText = '❌ Gagal mendekripsi pesan';
+                        messageEl.classList.add('decrypt-error');
+                    }
+                } catch (error) {
+                    messageText = '❌ Error dekripsi pesan';
+                    messageEl.classList.add('decrypt-error');
+                }
+            } else {
+                messageText = '🔒 Pesan terenkripsi - tidak ada kunci';
+                messageEl.classList.add('decrypt-error');
+            }
+        } else {
+            messageText = message.text || '';
+            if (message.media) {
+                mediaContent = createMediaContent(message.media);
+            }
         }
         
-        // Add media if present
-        if (message.media) {
-            const mediaPath = message.media.path;
-            const fileExt = mediaPath.split('.').pop().toLowerCase();
-            
-            // Images
-            if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExt)) {
-                const img = document.createElement('img');
-                img.src = mediaPath;
-                img.alt = 'Image';
-                img.loading = 'lazy';
-                contentEl.appendChild(img);
-            }
-            // Videos
-            else if (['mp4', 'mov', 'avi', 'webm'].includes(fileExt)) {
-                const video = document.createElement('video');
-                video.src = mediaPath;
-                video.controls = true;
-                contentEl.appendChild(video);
-            }
-            // Audio
-            else if (['mp3', 'wav', 'ogg', 'm4a'].includes(fileExt)) {
-                const audio = document.createElement('audio');
-                audio.src = mediaPath;
-                audio.controls = true;
-                contentEl.appendChild(audio);
-            }
-            // Documents
-            else {
-                const link = document.createElement('a');
-                link.href = mediaPath;
-                link.target = '_blank';
-                link.textContent = message.media.originalName || 'Download File';
-                
-                const fileIcon = document.createElement('i');
-                fileIcon.className = 'fas fa-file';
-                fileIcon.style.marginRight = '5px';
-                
-                link.prepend(fileIcon);
-                contentEl.appendChild(document.createElement('br'));
-                contentEl.appendChild(link);
-            }
+        if (messageText) {
+            contentEl.innerHTML = formatMessageText(messageText);
+        }
+        
+        if (mediaContent) {
+            contentEl.innerHTML += mediaContent;
         }
         
         messagesContainer.appendChild(messageEl);
+    }
+    
+    function createMediaContent(media) {
+        if (!media || !media.path) return '';
+        
+        const mediaPath = media.path;
+        const fileExt = mediaPath.split('.').pop().toLowerCase();
+        
+        // Images
+        if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExt)) {
+            return `<img src="${mediaPath}" alt="Image" loading="lazy">`;
+        }
+        // Videos
+        else if (['mp4', 'mov', 'avi', 'webm'].includes(fileExt)) {
+            return `<video src="${mediaPath}" controls></video>`;
+        }
+        // Audio
+        else if (['mp3', 'wav', 'ogg', 'm4a'].includes(fileExt)) {
+            return `<audio src="${mediaPath}" controls></audio>`;
+        }
+        // Documents
+        else {
+            const fileName = media.originalName || 'Download File';
+            return `<br><a href="${mediaPath}" target="_blank"><i class="fas fa-file"></i> ${fileName}</a>`;
+        }
     }
     
     function formatMessageText(text) {
@@ -282,7 +529,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function showSystemMessage(text) {
         const messageEl = document.createElement('div');
         messageEl.className = 'system-message';
-        messageEl.textContent = text;
+        messageEl.innerHTML = `<i class="fas fa-info-circle"></i> ${text}`;
         messagesContainer.appendChild(messageEl);
         scrollToBottom();
     }
@@ -386,11 +633,15 @@ document.addEventListener('DOMContentLoaded', function() {
         
         users.forEach(user => {
             const li = document.createElement('li');
-            li.textContent = user.username;
+            li.innerHTML = `
+                <i class="fas fa-user-circle"></i>
+                ${user.username}
+                ${user.username === currentUser ? ' (Kamu)' : ''}
+                <i class="fas fa-shield-alt encryption-icon" title="Enkripsi Aktif"></i>
+            `;
             
             if (user.username === currentUser) {
                 li.classList.add('current-user');
-                li.textContent += ' (Kamu)';
             }
             
             onlineUsersList.appendChild(li);
@@ -398,7 +649,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     function confirmClearMessages() {
-        if (confirm('Hapus semua pesan? Tindakan ini tidak dapat dibatalkan.')) {
+        if (confirm('Hapus semua pesan terenkripsi? Tindakan ini tidak dapat dibatalkan.')) {
             socket.emit('clear_messages');
         }
     }
