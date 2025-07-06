@@ -27,23 +27,6 @@ body, html {
     overflow: hidden;
 }
 
-/* Key Generation Screen */
-.key-generation-screen {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(45deg, #1a1a2e, #16213e, #0f3460);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
-    backdrop-filter: blur(10px);
-}
-
-.key-generation-container {
-    text-align: center;
     
 /* Floating Hearts Animation */
 @keyframes floatingHearts {
@@ -712,6 +695,49 @@ body, html {
     0%, 100% { opacity: 0.5; }
     50% { opacity: 1; }
 }
+
+/* Tambahkan setelah styling message yang sudah ada */
+
+.system-message {
+    text-align: center;
+    padding: 8px 12px;
+    margin: 10px auto;
+    background: linear-gradient(135deg, rgba(233, 30, 99, 0.1), rgba(233, 30, 99, 0.05));
+    border-radius: 20px;
+    font-size: 14px;
+    color: var(--text-light);
+    max-width: 300px;
+    border: 1px solid rgba(233, 30, 99, 0.2);
+    animation: systemMessageSlide 0.5s ease-out;
+}
+
+@keyframes systemMessageSlide {
+    from { 
+        opacity: 0; 
+        transform: translateY(-10px) scale(0.9);
+    }
+    to { 
+        opacity: 1; 
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Encryption indicator styling */
+.message-content span[title*="terenkripsi"] {
+    animation: encryptionPulse 3s ease-in-out infinite;
+}
+
+@keyframes encryptionPulse {
+    0%, 100% { 
+        opacity: 0.7;
+        transform: scale(1);
+    }
+    50% { 
+        opacity: 1;
+        transform: scale(1.1);
+    }
+}
+
 
 /* Input Area */
 .chat-input {
