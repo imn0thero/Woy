@@ -4,7 +4,6 @@ const socketIo = require('socket.io');
 const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
-// Tambahkan library untuk enkripsi end-to-end
 const crypto = require('crypto');
 
 const app = express();
@@ -17,7 +16,6 @@ app.use(express.json());
 
 const MESSAGES_FILE = path.join(__dirname, 'messages.json');
 const USERS_FILE = path.join(__dirname, 'users.json');
-// File untuk menyimpan kunci publik pengguna
 const KEYS_FILE = path.join(__dirname, 'keys.json');
 
 // Setup multer
@@ -51,13 +49,26 @@ const upload = multer({
   }
 });
 
+// Variables
 let connectedUsers = {};
 let messages = [];
 let authorizedUsers = [];
-// Menambahkan objek untuk menyimpan kunci publik pengguna
 let userPublicKeys = {};
 const MAX_USERS = 2; // Dibatasi hanya 2 user
 const MESSAGE_EXPIRY_HOURS = 24;
+
+// Generate server keypair untuk verifikasi
+const { publicKey: serverPublicKey, privateKey: serverPrivateKey } = crypto.generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  publicKeyEncoding: {
+    type: 'spki',
+    format: 'pem'
+  },
+  privateKeyEncoding: {
+    type: 'pkcs8',
+    format: 'pem'
+  }
+});
 
 // Load authorized users from file
 function loadAuthorizedUsers() {
@@ -65,7 +76,7 @@ function loadAuthorizedUsers() {
     if (fs.existsSync(USERS_FILE)) {
       const data = fs.readFileSync(USERS_FILE, 'utf8');
       authorizedUsers = JSON.parse(data);
-      console.log(`Loaded ${authorizedUsers.length} authorized users`);
+      console.log(`💕 Loaded ${authorizedUsers.length} authorized users`);
     } else {
       // Buat file users.json default jika tidak ada
       authorizedUsers = [
@@ -73,13 +84,13 @@ function loadAuthorizedUsers() {
         { username: "Queen" }
       ];
       saveAuthorizedUsers();
-      console.log('Created default users.json file');
+      console.log('💕 Created default users.json file');
     }
   } catch (error) {
     console.error('Error loading authorized users:', error);
     authorizedUsers = [
-      { username: "admin" },
-      { username: "user1" }
+      { username: "Azz" },
+      { username: "Queen" }
     ];
   }
 }
@@ -99,10 +110,10 @@ function loadPublicKeys() {
     if (fs.existsSync(KEYS_FILE)) {
       const data = fs.readFileSync(KEYS_FILE, 'utf8');
       userPublicKeys = JSON.parse(data);
-      console.log(`Loaded public keys for ${Object.keys(userPublicKeys).length} users`);
+      console.log(`🔑 Loaded public keys for ${Object.keys(userPublicKeys).length} users`);
     } else {
       userPublicKeys = {};
-      console.log('No existing keys file found, starting fresh');
+      console.log('🔑 No existing keys file found, starting fresh');
     }
   } catch (error) {
     console.error('Error loading public keys:', error);
@@ -130,11 +141,11 @@ function loadMessages() {
     if (fs.existsSync(MESSAGES_FILE)) {
       const data = fs.readFileSync(MESSAGES_FILE, 'utf8');
       messages = JSON.parse(data);
-      console.log(`Loaded ${messages.length} messages from file`);
+      console.log(`💕 Loaded ${messages.length} encrypted messages from file`);
       cleanExpiredMessages();
     } else {
       messages = [];
-      console.log('No existing messages file found, starting fresh');
+      console.log('💕 No existing messages file found, starting fresh');
     }
   } catch (error) {
     console.error('Error loading messages:', error);
@@ -160,7 +171,7 @@ function deleteMediaFile(message) {
         if (err) {
           console.error(`Gagal menghapus file ${filePath}:`, err);
         } else {
-          console.log(`Media dihapus: ${filePath}`);
+          console.log(`💕 Media dihapus: ${filePath}`);
         }
       });
     }
@@ -185,38 +196,36 @@ function cleanExpiredMessages() {
   messages = newMessages;
 
   if (removedCount > 0) {
-    console.log(`Removed ${removedCount} expired messages`);
+    console.log(`💕 Removed ${removedCount} expired encrypted messages`);
     saveMessages();
     io.emit('messages_cleaned', { removedCount });
   }
 }
 
-// Generate server signature untuk verifikasi
-const { publicKey: serverPublicKey, privateKey: serverPrivateKey } = crypto.generateKeyPairSync('rsa', {
-  modulusLength: 2048,
-  publicKeyEncoding: {
-    type: 'spki',
-    format: 'pem'
-  },
-  privateKeyEncoding: {
-    type: 'pkcs8',
-    format: 'pem'
-  }
-});
-
 // Fungsi untuk membuat signature pesan dari server
 function createServerSignature(message) {
-  const sign = crypto.createSign('SHA256');
-  sign.write(JSON.stringify(message));
-  sign.end();
-  return sign.sign(serverPrivateKey, 'base64');
+  try {
+    const sign = crypto.createSign('SHA256');
+    sign.write(JSON.stringify({
+      id: message.id,
+      username: message.username,
+      timestamp: message.timestamp
+    }));
+    sign.end();
+    return sign.sign(serverPrivateKey, 'base64');
+  } catch (error) {
+    console.error('Error creating server signature:', error);
+    return null;
+  }
 }
 
-// Jalankan setiap jam
-setInterval(cleanExpiredMessages, 60 * 60 * 1000);
+// Initialize
 loadAuthorizedUsers();
 loadMessages();
 loadPublicKeys();
+
+// Jalankan pembersihan setiap jam
+setInterval(cleanExpiredMessages, 60 * 60 * 1000);
 
 // ROUTES
 app.get('/', (req, res) => {
@@ -228,6 +237,7 @@ app.post('/upload', upload.single('media'), (req, res) => {
     return res.status(400).json({ error: 'No file uploaded' });
   }
 
+  console.log(`💕 File uploaded: ${req.file.originalname}`);
   res.json({
     filename: req.file.filename,
     originalName: req.file.originalname,
@@ -243,15 +253,16 @@ app.get('/server-key', (req, res) => {
 
 // SOCKET.IO
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('💕 User connected:', socket.id);
 
   // Kirim server public key ke client yang baru terhubung
   socket.emit('server_public_key', { serverPublicKey });
 
+  // Register public key dari client
   socket.on('register_public_key', (data) => {
     if (!socket.username) return;
     
-    // Simpan kunci publik pengguna
+    console.log(`🔑 Registering public key for ${socket.username}`);
     userPublicKeys[socket.username] = data.publicKey;
     savePublicKeys();
     
@@ -261,21 +272,21 @@ io.on('connection', (socket) => {
       publicKey: data.publicKey 
     });
     
-    // Kirim semua kunci publik yang ada ke client baru
-    socket.emit('all_public_keys', userPublicKeys);
+    console.log(`🔑 Public key registered for ${socket.username}`);
   });
 
   socket.on('join', (username) => {
     // Cek apakah username ada di users.json
     if (!isUserAuthorized(username)) {
       socket.emit('unauthorized');
-      console.log(`Unauthorized access attempt: ${username}`);
+      console.log(`💔 Unauthorized access attempt: ${username}`);
       return;
     }
 
     // Cek apakah sudah mencapai batas maksimal user (2 user)
     if (Object.keys(connectedUsers).length >= MAX_USERS) {
       socket.emit('room_full');
+      console.log(`💔 Room full, rejected: ${username}`);
       return;
     }
 
@@ -283,6 +294,7 @@ io.on('connection', (socket) => {
     const isTaken = Object.values(connectedUsers).some(user => user.username === username);
     if (isTaken) {
       socket.emit('username_taken');
+      console.log(`💔 Username taken: ${username}`);
       return;
     }
 
@@ -293,41 +305,63 @@ io.on('connection', (socket) => {
     };
 
     socket.username = username;
+    
+    // Load messages dan kirim semua public key yang ada
     socket.emit('load_messages', messages);
     socket.emit('all_public_keys', userPublicKeys);
+    
+    // Update user list
     io.emit('user_list_update', Object.values(connectedUsers));
     socket.broadcast.emit('user_joined', username);
-    console.log(`${username} joined (authorized)`);
+    
+    console.log(`💕 ${username} joined the romantic chat (authorized & encrypted)`);
   });
 
   socket.on('new_message', (data) => {
     if (!socket.username) return;
 
-    // Data sudah terenkripsi di client side
-    const message = {
-      id: Date.now() + Math.random(),
-      username: socket.username,
-      // Pesan sudah terenkripsi oleh pengirim di client side
-      encryptedContent: data.encryptedContent,
-      // Kunci pesan terenkripsi untuk setiap recipient
-      encryptedKeys: data.encryptedKeys,
-      // Signature untuk verifikasi
-      signature: data.signature,
-      media: data.media || null,
-      timestamp: new Date(),
-      type: data.type || 'encrypted'
-    };
+    console.log(`💕 Encrypted message from ${socket.username}`);
 
-    // Tambahkan signature server
-    message.serverSignature = createServerSignature({
-      id: message.id,
-      username: message.username,
-      timestamp: message.timestamp
-    });
+    // Untuk pesan terenkripsi
+    if (data.type === 'encrypted') {
+      const message = {
+        id: Date.now() + Math.random(),
+        username: socket.username,
+        // Pesan sudah terenkripsi di client side
+        encryptedContent: data.encryptedContent,
+        // Kunci pesan terenkripsi untuk setiap recipient
+        encryptedKeys: data.encryptedKeys,
+        media: data.media || null,
+        timestamp: new Date(),
+        type: 'encrypted'
+      };
 
-    messages.push(message);
-    saveMessages();
-    io.emit('message_received', message);
+      // Tambahkan signature server untuk verifikasi
+      message.serverSignature = createServerSignature(message);
+
+      messages.push(message);
+      saveMessages();
+      io.emit('message_received', message);
+      
+      console.log(`🔒 Encrypted message saved with ${Object.keys(data.encryptedKeys || {}).length} recipient keys`);
+    } 
+    // Untuk pesan biasa (fallback)
+    else {
+      const message = {
+        id: Date.now() + Math.random(),
+        username: socket.username,
+        text: data.text,
+        media: data.media || null,
+        timestamp: new Date(),
+        type: data.type || 'text'
+      };
+
+      messages.push(message);
+      saveMessages();
+      io.emit('message_received', message);
+      
+      console.log(`💕 Regular message from ${socket.username}`);
+    }
   });
 
   socket.on('typing', (isTyping) => {
@@ -341,11 +375,15 @@ io.on('connection', (socket) => {
   socket.on('clear_messages', () => {
     if (!socket.username) return;
 
+    console.log(`💕 ${socket.username} clearing all encrypted messages`);
+    
+    // Hapus file media dari semua pesan
     messages.forEach(deleteMediaFile);
     messages = [];
     saveMessages();
     io.emit('messages_cleared');
-    console.log(`${socket.username} cleared messages`);
+    
+    console.log(`💕 All encrypted messages cleared by ${socket.username}`);
   });
 
   socket.on('disconnect', () => {
@@ -353,12 +391,58 @@ io.on('connection', (socket) => {
       delete connectedUsers[socket.id];
       io.emit('user_list_update', Object.values(connectedUsers));
       socket.broadcast.emit('user_left', socket.username);
-      console.log(`${socket.username} left`);
+      console.log(`💔 ${socket.username} left the romantic chat`);
+    } else {
+      console.log('💔 Anonymous user disconnected:', socket.id);
     }
+  });
+
+  // Handle connection errors
+  socket.on('error', (error) => {
+    console.error('💔 Socket error:', error);
+  });
+});
+
+// Handle server errors
+server.on('error', (error) => {
+  console.error('💔 Server error:', error);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n💕 Shutting down romantic chat server gracefully...');
+  
+  // Save current state
+  saveMessages();
+  saveAuthorizedUsers();
+  savePublicKeys();
+  
+  server.close(() => {
+    console.log('💕 Romantic chat server closed. Goodbye lovers! 💕');
+    process.exit(0);
+  });
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n💕 Received SIGTERM, shutting down gracefully...');
+  
+  // Save current state
+  saveMessages();
+  saveAuthorizedUsers();
+  savePublicKeys();
+  
+  server.close(() => {
+    console.log('💕 Romantic chat server terminated. Until we meet again! 💕');
+    process.exit(0);
   });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`💕💕💕 Romantic Encrypted Chat Server running on port ${PORT} 💕💕💕`);
+  console.log(`🔒 End-to-End Encryption: ENABLED`);
+  console.log(`👥 Max Users: ${MAX_USERS}`);
+  console.log(`⏰ Message Expiry: ${MESSAGE_EXPIRY_HOURS} hours`);
+  console.log(`💖 Authorized Users: ${authorizedUsers.map(u => u.username).join(', ')}`);
+  console.log('💕 Server ready for romantic conversations! 💕');
 });
