@@ -9,10 +9,28 @@
     <link rel="stylesheet" href="stylee.css">
 </head>
 <body>
+    <!-- Loading Screen untuk Key Generation -->
+    <div id="key-generation-screen" class="key-generation-screen">
+        <div class="key-generation-container">
+            <div class="romantic-spinner">
+                <div class="heart-spinner">💖</div>
+            </div>
+            <h2><i class="fas fa-lock"></i> Mengamankan Percakapan Cinta</h2>
+            <p>Sedang membuat kunci enkripsi untuk melindungi pesan-pesan romantis...</p>
+            <div class="progress-bar">
+                <div class="progress-fill"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Login Screen -->
-    <div id="login-screen">
+    <div id="login-screen" class="hidden">
         <div class="login-container">
             <h1><i class="fas fa-heart"></i>Mau Masuk Ke Hatiku Sayang?</h1>
+            <!-- Status Enkripsi -->
+            <div class="encryption-status">
+                <i class="fas fa-shield-alt"></i> Percakapan Aman & Terenkripsi
+            </div>
             <div class="input-group">
                 <input type="text" id="username-input" placeholder="Masukkan nama..." maxlength="20">
                 <button id="join-btn"><i class="fas fa-sign-in-alt"></i></button>
@@ -31,6 +49,10 @@
             <div class="header-center">
                 <div id="online-users-toggle">
                     <i class="fas fa-users"></i> <span id="online-count">0</span>
+                </div>
+                <!-- Status enkripsi di header -->
+                <div class="header-encryption-status">
+                    <i class="fas fa-lock" title="End-to-End Encrypted"></i>
                 </div>
             </div>
             <div class="header-right">
@@ -67,7 +89,7 @@
                     <i class="fas fa-paperclip"></i>
                 </label>
                 <input type="file" id="file-input" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt" hidden>
-                <textarea id="message-input" placeholder="Sampaikan perasaan..." rows="1"></textarea>
+                <textarea id="message-input" placeholder="Sampaikan perasaan terenkripsi..." rows="1"></textarea>
                 <button id="send-btn" disabled title="Kirim">
                     <i class="fas fa-paper-plane"></i>
                 </button>
@@ -81,30 +103,32 @@
             <div class="message-header">
                 <span class="message-username"></span>
                 <span class="message-time"></span>
+                <span class="encryption-indicator"><i class="fas fa-lock"></i></span>
             </div>
             <div class="message-content"></div>
         </div>
     </template>
 
     <!-- Floating Hearts -->
-<div class="floating-hearts">
-    <div class="heart">💖</div>
-    <div class="heart">💕</div>
-    <div class="heart">💝</div>
-    <div class="heart">💗</div>
-    <div class="heart">💓</div>
-    <div class="heart">💖</div>
-    <div class="heart">💕</div>
-    <div class="heart">💝</div>
-    <div class="heart">💗</div>
-</div>
+    <div class="floating-hearts">
+        <div class="heart">💖</div>
+        <div class="heart">💕</div>
+        <div class="heart">💝</div>
+        <div class="heart">💗</div>
+        <div class="heart">💓</div>
+        <div class="heart">💖</div>
+        <div class="heart">💕</div>
+        <div class="heart">💝</div>
+        <div class="heart">💗</div>
+    </div>
 
-<!-- Sparkles -->
-<div class="sparkles">
-    <div class="sparkle">✨</div>
-    <div class="sparkle">⭐</div>
-    <div class="sparkle">✨</div>
-    <div class="sparkle">⭐</div>
+    <!-- Sparkles -->
+    <div class="sparkles">
+        <div class="sparkle">✨</div>
+        <div class="sparkle">⭐</div>
+        <div class="sparkle">✨</div>
+        <div class="sparkle">⭐</div>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="script.js"></script>
