@@ -26,15 +26,180 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentMedia = null;
     let typingTimeout;
     
-    // Crypto variables
-    let keyPair = null; // Menyimpan keypair RSA kita
-    let privateKey = null; // Private key kita
-    let publicKey = null; // Public key kita
-    let serverPublicKey = null; // Public key server
-    let userPublicKeys = {}; // Menyimpan public key semua user
+    // Encryption variables
+    let userKeyPair = null;
+    let serverPublicKey = null;
+    let userPublicKeys = {};
     
     // Initialize
     init();
+    
+    // Crypto Functions
+    async function generateKeyPair() {
+        try {
+            const keyPair = await crypto.subtle.generateKey(
+                {
+                    name: "RSA-OAEP",
+                    modulusLength: 2048,
+                    publicExponent: new Uint8Array([1, 0, 1]),
+                    hash: "SHA-256"
+                },
+                true,
+                ["encrypt", "decrypt"]
+            );
+            
+            return keyPair;
+        } catch (error) {
+            console.error('Error generating key pair:', error);
+            return null;
+        }
+    }
+    
+    async function exportPublicKey(publicKey) {
+        try {
+            const exported = await crypto.subtle.exportKey("spki", publicKey);
+            return arrayBufferToBase64(exported);
+        } catch (error) {
+            console.error('Error exporting public key:', error);
+            return null;
+        }
+    }
+    
+    async function importPublicKey(publicKeyData) {
+        try {
+            const keyData = base64ToArrayBuffer(publicKeyData);
+            return await crypto.subtle.importKey(
+                "spki",
+                keyData,
+                {
+                    name: "RSA-OAEP",
+                    hash: "SHA-256"
+                },
+                false,
+                ["encrypt"]
+            );
+        } catch (error) {
+            console.error('Error importing public key:', error);
+            return null;
+        }
+    }
+    
+    async function encryptMessage(message, publicKey) {
+        try {
+            const encoded = new TextEncoder().encode(message);
+            const encrypted = await crypto.subtle.encrypt(
+                {
+                    name: "RSA-OAEP"
+                },
+                publicKey,
+                encoded
+            );
+            
+            return arrayBufferToBase64(encrypted);
+        } catch (error) {
+            console.error('Error encrypting message:', error);
+            return null;
+        }
+    }
+    
+    async function decryptMessage(encryptedMessage, privateKey) {
+        try {
+            const encryptedData = base64ToArrayBuffer(encryptedMessage);
+            const decrypted = await crypto.subtle.decrypt(
+                {
+                    name: "RSA-OAEP"
+                },
+                privateKey,
+                encryptedData
+            );
+            
+            return new TextDecoder().decode(decrypted);
+        } catch (error) {
+            console.error('Error decrypting message:', error);
+            return null;
+        }
+    }
+    
+    function arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    }
+    
+    function base64ToArrayBuffer(base64) {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+    
+    // Generate random AES key for message encryption
+    async function generateAESKey() {
+        return await crypto.subtle.generateKey(
+            {
+                name: "AES-GCM",
+                length: 256
+            },
+            true,
+            ["encrypt", "decrypt"]
+        );
+    }
+    
+    async function encryptWithAES(message, key) {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const encoded = new TextEncoder().encode(message);
+        
+        const encrypted = await crypto.subtle.encrypt(
+            {
+                name: "AES-GCM",
+                iv: iv
+            },
+            key,
+            encoded
+        );
+        
+        return {
+            data: arrayBufferToBase64(encrypted),
+            iv: arrayBufferToBase64(iv)
+        };
+    }
+    
+    async function decryptWithAES(encryptedData, key, iv) {
+        const data = base64ToArrayBuffer(encryptedData);
+        const ivArray = base64ToArrayBuffer(iv);
+        
+        const decrypted = await crypto.subtle.decrypt(
+            {
+                name: "AES-GCM",
+                iv: ivArray
+            },
+            key,
+            data
+        );
+        
+        return new TextDecoder().decode(decrypted);
+    }
+    
+    async function exportAESKey(key) {
+        const exported = await crypto.subtle.exportKey("raw", key);
+        return arrayBufferToBase64(exported);
+    }
+    
+    async function importAESKey(keyData) {
+        const keyBuffer = base64ToArrayBuffer(keyData);
+        return await crypto.subtle.importKey(
+            "raw",
+            keyBuffer,
+            "AES-GCM",
+            false,
+            ["decrypt"]
+        );
+    }
     
     // Functions
     function init() {
@@ -102,229 +267,22 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Handle window resize
         window.addEventListener('resize', handleResize);
-        
-        // Generate keys when the page loads
-        generateUserKeys();
     }
     
-    // Generate RSA key pair for user
-    async function generateUserKeys() {
-        try {
-            keyPair = await window.crypto.subtle.generateKey(
-                {
-                    name: "RSA-OAEP",
-                    modulusLength: 2048,
-                    publicExponent: new Uint8Array([1, 0, 1]),
-                    hash: "SHA-256",
-                },
-                true,
-                ["encrypt", "decrypt"]
-            );
-            
-            privateKey = keyPair.privateKey;
-            publicKey = keyPair.publicKey;
-            
-            // Export public key to send to server
-            const exportedPublicKey = await window.crypto.subtle.exportKey(
-                "spki",
-                publicKey
-            );
-            
-            const publicKeyBase64 = arrayBufferToBase64(exportedPublicKey);
-            
-            console.log("🔑 Kunci enkripsi berhasil dibuat");
-        } catch (error) {
-            console.error("Gagal membuat kunci enkripsi:", error);
-        }
-    }
-    
-    // Helper for Base64 conversion
-    function arrayBufferToBase64(buffer) {
-        const binary = String.fromCharCode.apply(null, new Uint8Array(buffer));
-        return btoa(binary);
-    }
-    
-    function base64ToArrayBuffer(base64) {
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-        }
-        return bytes.buffer;
-    }
-    
-    // Generate a symmetric key for message encryption
-    async function generateMessageKey() {
-        return await window.crypto.subtle.generateKey(
-            {
-                name: "AES-GCM",
-                length: 256
-            },
-            true,
-            ["encrypt", "decrypt"]
-        );
-    }
-    
-    // Encrypt message with symmetric key
-    async function encryptMessage(messageKey, message) {
-        const iv = window.crypto.getRandomValues(new Uint8Array(12));
-        const encoder = new TextEncoder();
-        const messageData = encoder.encode(message);
-        
-        const encryptedData = await window.crypto.subtle.encrypt(
-            {
-                name: "AES-GCM",
-                iv: iv
-            },
-            messageKey,
-            messageData
-        );
-        
-        // Return IV + encrypted data in Base64
-        const combinedArray = new Uint8Array(iv.length + encryptedData.byteLength);
-        combinedArray.set(iv, 0);
-        combinedArray.set(new Uint8Array(encryptedData), iv.length);
-        
-        return arrayBufferToBase64(combinedArray.buffer);
-    }
-    
-    // Decrypt message with symmetric key
-    async function decryptMessage(messageKey, encryptedMessage) {
-        try {
-            const encryptedData = base64ToArrayBuffer(encryptedMessage);
-            const iv = encryptedData.slice(0, 12);
-            const actualEncrypted = encryptedData.slice(12);
-            
-            const decryptedData = await window.crypto.subtle.decrypt(
-                {
-                    name: "AES-GCM",
-                    iv: new Uint8Array(iv)
-                },
-                messageKey,
-                actualEncrypted
-            );
-            
-            const decoder = new TextDecoder();
-            return decoder.decode(decryptedData);
-        } catch (error) {
-            console.error("Gagal mendekripsi pesan:", error);
-            return "[Pesan tidak dapat didekripsi]";
-        }
-    }
-    
-    // Encrypt symmetric key with recipient's public key
-    async function encryptKey(recipientPublicKey, messageKey) {
-        try {
-            // Import recipient's public key
-            const importedPublicKey = await window.crypto.subtle.importKey(
-                "spki",
-                base64ToArrayBuffer(recipientPublicKey),
-                {
-                    name: "RSA-OAEP",
-                    hash: "SHA-256"
-                },
-                false,
-                ["encrypt"]
-            );
-            
-            // Export symmetric key
-            const exportedKey = await window.crypto.subtle.exportKey(
-                "raw",
-                messageKey
-            );
-            
-            // Encrypt symmetric key with recipient's public key
-            const encryptedKey = await window.crypto.subtle.encrypt(
-                {
-                    name: "RSA-OAEP"
-                },
-                importedPublicKey,
-                exportedKey
-            );
-            
-            return arrayBufferToBase64(encryptedKey);
-        } catch (error) {
-            console.error("Gagal mengenkripsi kunci untuk penerima:", error);
-            return null;
-        }
-    }
-    
-    // Decrypt symmetric key with our private key
-    async function decryptKey(encryptedKey) {
-        try {
-            const decryptedKeyBuffer = await window.crypto.subtle.decrypt(
-                {
-                    name: "RSA-OAEP"
-                },
-                privateKey,
-                base64ToArrayBuffer(encryptedKey)
-            );
-            
-            // Import the symmetric key
-            return await window.crypto.subtle.importKey(
-                "raw",
-                decryptedKeyBuffer,
-                {
-                    name: "AES-GCM",
-                    length: 256
-                },
-                false,
-                ["decrypt"]
-            );
-        } catch (error) {
-            console.error("Gagal mendekripsi kunci:", error);
-            return null;
-        }
-    }
-    
-    // Verify server signature
-    async function verifyServerSignature(message, signature) {
-        try {
-            if (!serverPublicKey) {
-                console.error("Server public key tidak tersedia");
-                return false;
-            }
-            
-            // Import server's public key
-            const importedServerKey = await window.crypto.subtle.importKey(
-                "spki",
-                base64ToArrayBuffer(serverPublicKey),
-                {
-                    name: "RSA-PKCS1-v1_5",
-                    hash: "SHA-256"
-                },
-                false,
-                ["verify"]
-            );
-            
-            // Data to verify
-            const encoder = new TextEncoder();
-            const data = encoder.encode(JSON.stringify({
-                id: message.id,
-                username: message.username,
-                timestamp: message.timestamp
-            }));
-            
-            // Verify signature
-            return await window.crypto.subtle.verify(
-                {
-                    name: "RSA-PKCS1-v1_5"
-                },
-                importedServerKey,
-                base64ToArrayBuffer(signature),
-                data
-            );
-        } catch (error) {
-            console.error("Gagal memverifikasi tanda tangan server:", error);
-            return false;
-        }
-    }
-    
-    function joinChat() {
+    async function joinChat() {
         const username = usernameInput.value.trim();
         
         if (!username) {
             showLoginError('Silakan masukkan nama pengguna');
+            return;
+        }
+        
+        // Generate user key pair
+        showLoginError('🔑 Mempersiapkan enkripsi...');
+        userKeyPair = await generateKeyPair();
+        
+        if (!userKeyPair) {
+            showLoginError('Gagal mempersiapkan enkripsi. Refresh dan coba lagi.');
             return;
         }
         
@@ -334,6 +292,28 @@ document.addEventListener('DOMContentLoaded', function() {
         // Socket events
         socket.on('connect', function() {
             socket.emit('join', username);
+        });
+        
+        socket.on('server_public_key', async function(data) {
+            console.log('🔑 Received server public key');
+            serverPublicKey = data.serverPublicKey;
+            
+            // Register our public key
+            const publicKeyData = await exportPublicKey(userKeyPair.publicKey);
+            if (publicKeyData) {
+                socket.emit('register_public_key', { publicKey: publicKeyData });
+                console.log('🔑 Sent our public key to server');
+            }
+        });
+        
+        socket.on('all_public_keys', function(keys) {
+            console.log('🔑 Received all public keys:', Object.keys(keys));
+            userPublicKeys = keys;
+        });
+        
+        socket.on('public_key_update', function(data) {
+            console.log('🔑 Public key update for:', data.username);
+            userPublicKeys[data.username] = data.publicKey;
         });
 
         socket.on('unauthorized', () => {
@@ -348,40 +328,16 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoginError('Chat room penuh, silakan coba lagi nanti');
         });
         
-        socket.on('server_public_key', async function(data) {
-            serverPublicKey = data.serverPublicKey;
-            console.log("🔑 Menerima kunci publik dari server");
-            
-            // Export our public key
-            const exportedPublicKey = await window.crypto.subtle.exportKey(
-                "spki",
-                publicKey
-            );
-            
-            // Send our public key to server
-            socket.emit('register_public_key', {
-                publicKey: arrayBufferToBase64(exportedPublicKey)
-            });
-        });
-        
-        socket.on('all_public_keys', function(keys) {
-            userPublicKeys = keys;
-            console.log(`🔑 Menerima ${Object.keys(keys).length} kunci publik pengguna`);
-        });
-        
-        socket.on('public_key_update', function(data) {
-            userPublicKeys[data.username] = data.publicKey;
-            console.log(`🔑 Update kunci publik dari ${data.username}`);
-        });
-        
-        socket.on('load_messages', function(messages) {
+        socket.on('load_messages', async function(messages) {
             messagesContainer.innerHTML = '';
-            messages.forEach(displayMessage);
+            for (const message of messages) {
+                await displayMessage(message);
+            }
             scrollToBottom();
         });
         
-        socket.on('message_received', function(message) {
-            displayMessage(message);
+        socket.on('message_received', async function(message) {
+            await displayMessage(message);
             scrollToBottom();
         });
         
@@ -419,11 +375,13 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function showLoginError(message) {
         loginError.textContent = message;
-        usernameInput.classList.add('error');
-        
-        setTimeout(() => {
-            usernameInput.classList.remove('error');
-        }, 1000);
+        if (!message.includes('🔑')) {
+            usernameInput.classList.add('error');
+            
+            setTimeout(() => {
+                usernameInput.classList.remove('error');
+            }, 1000);
+        }
     }
     
     async function sendMessage() {
@@ -432,46 +390,42 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!text && !currentMedia) return;
         
         try {
-            // Check if encryption is possible (we have other users' public keys)
-            const recipients = Object.keys(userPublicKeys);
+            // Generate AES key for this message
+            const aesKey = await generateAESKey();
             
-            // If we have recipients, use encrypted messages
-            if (recipients.length > 0) {
-                // Generate symmetric key for this message
-                const messageKey = await generateMessageKey();
-                
-                // Encrypt the message content
-                let encryptedContent = await encryptMessage(messageKey, 
-                    JSON.stringify({
-                        text: text,
-                        media: currentMedia
-                    })
-                );
-                
-                // Encrypt the symmetric key for each recipient
-                const encryptedKeys = {};
-                for (const username of recipients) {
-                    if (userPublicKeys[username]) {
-                        encryptedKeys[username] = await encryptKey(userPublicKeys[username], messageKey);
+            // Encrypt message with AES
+            const messageToEncrypt = JSON.stringify({
+                text: text,
+                media: currentMedia,
+                timestamp: new Date().toISOString()
+            });
+            
+            const encryptedContent = await encryptWithAES(messageToEncrypt, aesKey);
+            const exportedAESKey = await exportAESKey(aesKey);
+            
+            // Encrypt AES key for each online user
+            const encryptedKeys = {};
+            const onlineUsers = Array.from(onlineUsersList.children).map(li => 
+                li.textContent.replace(' (Kamu)', '')
+            );
+            
+            for (const username of onlineUsers) {
+                if (userPublicKeys[username]) {
+                    const userPublicKey = await importPublicKey(userPublicKeys[username]);
+                    if (userPublicKey) {
+                        encryptedKeys[username] = await encryptMessage(exportedAESKey, userPublicKey);
                     }
                 }
-                
-                // Send encrypted message to server
-                socket.emit('new_message', {
-                    type: 'encrypted',
-                    encryptedContent: encryptedContent,
-                    encryptedKeys: encryptedKeys,
-                    media: currentMedia
-                });
-            } 
-            // Fallback to unencrypted message if no recipients
-            else {
-                socket.emit('new_message', {
-                    text: text,
-                    type: currentMedia ? 'media' : 'text',
-                    media: currentMedia
-                });
             }
+            
+            const messageData = {
+                type: 'encrypted',
+                encryptedContent: encryptedContent,
+                encryptedKeys: encryptedKeys,
+                media: currentMedia
+            };
+            
+            socket.emit('new_message', messageData);
             
             // Reset input
             messageInput.value = '';
@@ -486,9 +440,10 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Focus input
             messageInput.focus();
+            
         } catch (error) {
-            console.error("Gagal mengirim pesan terenkripsi:", error);
-            alert("Gagal mengirim pesan terenkripsi. Silakan coba lagi.");
+            console.error('Error sending encrypted message:', error);
+            showSystemMessage('❌ Gagal mengirim pesan terenkripsi');
         }
     }
     
@@ -513,64 +468,70 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Handle encrypted messages
         if (message.type === 'encrypted') {
-            // Verify server signature if available
-            if (message.serverSignature) {
-                const isValid = await verifyServerSignature(message, message.serverSignature);
-                if (!isValid) {
-                    contentEl.innerHTML = '<div class="encrypted-warning"><i class="fas fa-exclamation-triangle"></i> Pesan tidak terverifikasi!</div>';
-                    messagesContainer.appendChild(messageEl);
-                    return;
-                }
-            }
-            
-            // Try to decrypt message if we have the key
-            if (message.encryptedKeys && message.encryptedKeys[currentUser]) {
-                try {
-                    // Decrypt symmetric key
-                    const messageKey = await decryptKey(message.encryptedKeys[currentUser]);
+            try {
+                // Check if we have the encrypted key for this message
+                if (message.encryptedKeys && message.encryptedKeys[currentUser]) {
+                    // Decrypt AES key
+                    const encryptedAESKey = message.encryptedKeys[currentUser];
+                    const decryptedAESKey = await decryptMessage(encryptedAESKey, userKeyPair.privateKey);
                     
-                    if (messageKey) {
+                    if (decryptedAESKey) {
+                        // Import AES key
+                        const aesKey = await importAESKey(decryptedAESKey);
+                        
                         // Decrypt message content
-                        const decryptedContent = await decryptMessage(messageKey, message.encryptedContent);
+                        const decryptedContent = await decryptWithAES(
+                            message.encryptedContent.data, 
+                            aesKey, 
+                            message.encryptedContent.iv
+                        );
+                        
                         const messageData = JSON.parse(decryptedContent);
                         
-                        // Display the message text
+                        // Display decrypted text
                         if (messageData.text) {
-                            contentEl.innerHTML = formatMessageText(messageData.text);
+                            contentEl.innerHTML += formatMessageText(messageData.text);
                         }
                         
-                        // Add media if present in the decrypted content
-                        if (message.media) {
-                            addMediaToMessage(contentEl, message.media);
+                        // Display media if present
+                        if (messageData.media) {
+                            displayMediaContent(contentEl, messageData.media);
                         }
+                        
+                        // Add encryption indicator
+                        const encryptionIcon = document.createElement('span');
+                        encryptionIcon.innerHTML = ' 🔒';
+                        encryptionIcon.style.fontSize = '12px';
+                        encryptionIcon.style.opacity = '0.7';
+                        encryptionIcon.title = 'Pesan terenkripsi end-to-end';
+                        contentEl.appendChild(encryptionIcon);
+                        
                     } else {
-                        contentEl.innerHTML = '<div class="encrypted-message"><i class="fas fa-lock"></i> Pesan terenkripsi</div>';
+                        contentEl.innerHTML = '🔒 <em>Gagal mendekripsi pesan</em>';
                     }
-                } catch (error) {
-                    console.error("Gagal mendekripsi pesan:", error);
-                    contentEl.innerHTML = '<div class="encrypted-message"><i class="fas fa-lock"></i> Pesan terenkripsi</div>';
+                } else {
+                    contentEl.innerHTML = '🔒 <em>Pesan terenkripsi (kunci tidak tersedia)</em>';
                 }
-            } else {
-                // We don't have the key for this message
-                contentEl.innerHTML = '<div class="encrypted-message"><i class="fas fa-lock"></i> Pesan terenkripsi</div>';
+            } catch (error) {
+                console.error('Error decrypting message:', error);
+                contentEl.innerHTML = '🔒 <em>Error mendekripsi pesan</em>';
             }
         } 
         // Handle regular messages (fallback)
         else {
             if (message.text) {
-                contentEl.innerHTML = formatMessageText(message.text);
+                contentEl.innerHTML += formatMessageText(message.text);
             }
             
-            // Add media if present
             if (message.media) {
-                addMediaToMessage(contentEl, message.media);
+                displayMediaContent(contentEl, message.media);
             }
         }
         
         messagesContainer.appendChild(messageEl);
     }
     
-    function addMediaToMessage(contentEl, media) {
+    function displayMediaContent(contentEl, media) {
         const mediaPath = media.path;
         const fileExt = mediaPath.split('.').pop().toLowerCase();
         
@@ -734,6 +695,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 li.classList.add('current-user');
                 li.textContent += ' (Kamu)';
             }
+            
+            // Add encryption status
+            const encryptionStatus = document.createElement('span');
+            if (userPublicKeys[user.username]) {
+                encryptionStatus.innerHTML = ' 🔒';
+                encryptionStatus.title = 'Enkripsi aktif';
+            } else {
+                encryptionStatus.innerHTML = ' ⚠️';
+                encryptionStatus.title = 'Enkripsi belum siap';
+            }
+            encryptionStatus.style.fontSize = '12px';
+            li.appendChild(encryptionStatus);
             
             onlineUsersList.appendChild(li);
         });
