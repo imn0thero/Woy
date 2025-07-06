@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentUser;
     let currentMedia = null;
     let typingTimeout;
+    let onlineUsers = [];
     
     // Encryption variables
     let userKeyPair = null;
@@ -342,6 +343,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         
         socket.on('user_list_update', function(users) {
+            onlineUsers = users; // Store online users
             updateOnlineUsers(users);
         });
         
@@ -403,20 +405,38 @@ document.addEventListener('DOMContentLoaded', function() {
             const encryptedContent = await encryptWithAES(messageToEncrypt, aesKey);
             const exportedAESKey = await exportAESKey(aesKey);
             
-            // Encrypt AES key for each online user
+            // Encrypt AES key for each online user (including ourselves)
             const encryptedKeys = {};
-            const onlineUsers = Array.from(onlineUsersList.children).map(li => 
-                li.textContent.replace(' (Kamu)', '')
-            );
             
-            for (const username of onlineUsers) {
+            console.log('📋 Online users:', onlineUsers.map(u => u.username));
+            console.log('🔑 Available public keys:', Object.keys(userPublicKeys));
+            
+            // Encrypt for all online users
+            for (const user of onlineUsers) {
+                const username = user.username;
+                console.log(`🔐 Encrypting for user: ${username}`);
+                
                 if (userPublicKeys[username]) {
-                    const userPublicKey = await importPublicKey(userPublicKeys[username]);
-                    if (userPublicKey) {
-                        encryptedKeys[username] = await encryptMessage(exportedAESKey, userPublicKey);
+                    try {
+                        const userPublicKey = await importPublicKey(userPublicKeys[username]);
+                        if (userPublicKey) {
+                            const encryptedKey = await encryptMessage(exportedAESKey, userPublicKey);
+                            if (encryptedKey) {
+                                encryptedKeys[username] = encryptedKey;
+                                console.log(`✅ Successfully encrypted for ${username}`);
+                            } else {
+                                console.log(`❌ Failed to encrypt for ${username}`);
+                            }
+                        }
+                    } catch (error) {
+                        console.error(`Error encrypting for ${username}:`, error);
                     }
+                } else {
+                    console.log(`⚠️ No public key for ${username}`);
                 }
             }
+            
+            console.log('🔑 Encrypted keys for:', Object.keys(encryptedKeys));
             
             const messageData = {
                 type: 'encrypted',
@@ -468,14 +488,22 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Handle encrypted messages
         if (message.type === 'encrypted') {
+            console.log('🔍 Processing encrypted message from:', message.username);
+            console.log('🔑 Available encrypted keys:', Object.keys(message.encryptedKeys || {}));
+            console.log('👤 Current user:', currentUser);
+            
             try {
                 // Check if we have the encrypted key for this message
                 if (message.encryptedKeys && message.encryptedKeys[currentUser]) {
+                    console.log('🔑 Found encrypted key for current user');
+                    
                     // Decrypt AES key
                     const encryptedAESKey = message.encryptedKeys[currentUser];
                     const decryptedAESKey = await decryptMessage(encryptedAESKey, userKeyPair.privateKey);
                     
                     if (decryptedAESKey) {
+                        console.log('✅ Successfully decrypted AES key');
+                        
                         // Import AES key
                         const aesKey = await importAESKey(decryptedAESKey);
                         
@@ -485,6 +513,8 @@ document.addEventListener('DOMContentLoaded', function() {
                             aesKey, 
                             message.encryptedContent.iv
                         );
+                        
+                        console.log('✅ Successfully decrypted message content');
                         
                         const messageData = JSON.parse(decryptedContent);
                         
@@ -507,9 +537,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         contentEl.appendChild(encryptionIcon);
                         
                     } else {
+                        console.log('❌ Failed to decrypt AES key');
                         contentEl.innerHTML = '🔒 <em>Gagal mendekripsi pesan</em>';
                     }
                 } else {
+                    console.log('❌ No encrypted key found for current user');
                     contentEl.innerHTML = '🔒 <em>Pesan terenkripsi (kunci tidak tersedia)</em>';
                 }
             } catch (error) {
