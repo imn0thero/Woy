@@ -10,7 +10,7 @@
 </head>
 <body>
     <!-- Loading Screen untuk Key Generation -->
-    <div id="key-generation-screen">
+    <div id="key-generation-screen" class="key-generation-screen">
         <div class="key-generation-container">
             <div class="romantic-spinner">
                 <div class="heart-spinner">💖</div>
@@ -25,9 +25,9 @@
 
     <!-- Login Screen -->
     <div id="login-screen" class="hidden">
-        <!-- Konten login screen yang sudah ada -->
         <div class="login-container">
             <h1><i class="fas fa-heart"></i>Mau Masuk Ke Hatiku Sayang?</h1>
+            <!-- Status Enkripsi -->
             <div class="encryption-status">
                 <i class="fas fa-shield-alt"></i> Percakapan Aman & Terenkripsi
             </div>
@@ -39,11 +39,98 @@
         </div>
     </div>
 
-    <!-- Sisa HTML tetap sama -->
-    <!-- ... -->
+    <!-- Main Chat Screen (hidden initially) -->
+    <div id="chat-screen" class="hidden">
+        <!-- Header -->
+        <div class="chat-header">
+            <div class="header-left">
+                <h2><i class="fas fa-heart"></i>𖡼.𖤣𖥧𖡼.𖤣𖥧</h2>
+            </div>
+            <div class="header-center">
+                <div id="online-users-toggle">
+                    <i class="fas fa-users"></i> <span id="online-count">0</span>
+                </div>
+                <!-- Status enkripsi di header -->
+                <div class="header-encryption-status">
+                    <i class="fas fa-lock" title="End-to-End Encrypted"></i>
+                </div>
+            </div>
+            <div class="header-right">
+                <button id="clear-messages-btn" title="Hapus Semua Pesan">
+                    <i class="fas fa-trash-alt"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Online Users Sidebar (initially hidden, toggles on small screens) -->
+        <div id="online-users-panel" class="hidden-mobile">
+            <div class="panel-header">
+                <h3>Online <span id="users-count">0</span></h3>
+                <button id="close-users-btn" class="visible-mobile">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <ul id="online-users-list"></ul>
+        </div>
+
+        <!-- Messages Container -->
+        <div id="messages-container">
+            <div id="messages"></div>
+            <div id="typing-indicator" class="hidden">
+                <span id="typing-username"></span> sedang menyampaikan perasaan...
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="chat-input">
+            <div class="attachment-preview" id="attachment-preview"></div>
+            <div class="input-container">
+                <label for="file-input" class="file-label" title="Upload File">
+                    <i class="fas fa-paperclip"></i>
+                </label>
+                <input type="file" id="file-input" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt" hidden>
+                <textarea id="message-input" placeholder="Sampaikan perasaan terenkripsi..." rows="1"></textarea>
+                <button id="send-btn" disabled title="Kirim">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Templates -->
+    <template id="message-template">
+        <div class="message">
+            <div class="message-header">
+                <span class="message-username"></span>
+                <span class="message-time"></span>
+                <span class="encryption-indicator"><i class="fas fa-lock"></i></span>
+            </div>
+            <div class="message-content"></div>
+        </div>
+    </template>
+
+    <!-- Floating Hearts -->
+    <div class="floating-hearts">
+        <div class="heart">💖</div>
+        <div class="heart">💕</div>
+        <div class="heart">💝</div>
+        <div class="heart">💗</div>
+        <div class="heart">💓</div>
+        <div class="heart">💖</div>
+        <div class="heart">💕</div>
+        <div class="heart">💝</div>
+        <div class="heart">💗</div>
+    </div>
+
+    <!-- Sparkles -->
+    <div class="sparkles">
+        <div class="sparkle">✨</div>
+        <div class="sparkle">⭐</div>
+        <div class="sparkle">✨</div>
+        <div class="sparkle">⭐</div>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="encrypt.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
