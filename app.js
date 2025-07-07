@@ -80,8 +80,8 @@ function loadAuthorizedUsers() {
     } else {
       // Buat file users.json default jika tidak ada
       authorizedUsers = [
-        { username: "Azz" },
-        { username: "Queen" }
+        { username: "Admin" },
+        { username: "User" }
       ];
       saveAuthorizedUsers();
       console.log('💕 Created default users.json file');
@@ -89,8 +89,8 @@ function loadAuthorizedUsers() {
   } catch (error) {
     console.error('Error loading authorized users:', error);
     authorizedUsers = [
-      { username: "Azz" },
-      { username: "Queen" }
+      { username: "Admin" },
+      { username: "User" }
     ];
   }
 }
